@@ -984,16 +984,25 @@ void LinkerDriver::createFiles(opt::InputArgList &Args) {
       InputFile::IsInGroup = true;
       break;
     case OPT_end_group:
-      if (!InputFile::IsInGroup)
+      if (!InputFile::IsInGroup || InLib)
         error("stray --end-group");
       InputFile::IsInGroup = false;
       ++InputFile::NextGroupId;
       break;
     case OPT_start_lib:
+      if (InLib)
+        error("nested --start-lib");
+      if (InputFile::IsInGroup)
+        error("may not nest --start-lib in --start-group");
       InLib = true;
+      InputFile::IsInGroup = true;
       break;
     case OPT_end_lib:
+      if (!InLib)
+        error("stray --end-lib");
       InLib = false;
+      InputFile::IsInGroup = false;
+      ++InputFile::NextGroupId;
       break;
     }
   }
