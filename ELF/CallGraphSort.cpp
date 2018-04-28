@@ -46,6 +46,9 @@
 #include "SymbolTable.h"
 #include "Symbols.h"
 
+#include <list>
+#include <numeric>
+
 using namespace llvm;
 using namespace lld;
 using namespace lld::elf;
@@ -68,7 +71,7 @@ struct Cluster {
     return double(Weight) / double(Size);
   }
 
-  std::vector<int> Sections;
+  std::list<int> Sections;
   size_t Size = 0;
   uint64_t Weight = 0;
   uint64_t InitialWeight = 0;
@@ -151,12 +154,18 @@ static bool isNewDensityBad(Cluster &A, Cluster &B) {
   return false;
 }
 
+static int findLeader(std::vector<int> &Leaders, int V) {
+  while (Leaders[V] != V) {
+    Leaders[V] = Leaders[Leaders[V]];
+    V = Leaders[V];
+  }
+  return V;
+}
+
 static void mergeClusters(Cluster &Into, Cluster &From) {
-  Into.Sections.insert(Into.Sections.end(), From.Sections.begin(),
-                       From.Sections.end());
+  Into.Sections.splice(Into.Sections.end(), From.Sections);
   Into.Size += From.Size;
   Into.Weight += From.Weight;
-  From.Sections.clear();
   From.Size = 0;
   From.Weight = 0;
 }
@@ -165,13 +174,10 @@ static void mergeClusters(Cluster &Into, Cluster &From) {
 // then sort the clusters by density.
 void CallGraphSort::groupClusters() {
   std::vector<int> SortedSecs(Clusters.size());
-  std::vector<Cluster *> SecToCluster(Clusters.size());
+  std::vector<int> Leaders(Clusters.size());
 
-  for (int SI = 0, SE = Clusters.size(); SI != SE; ++SI) {
-    SortedSecs[SI] = SI;
-    SecToCluster[SI] = &Clusters[SI];
-  }
-
+  std::iota(Leaders.begin(), Leaders.end(), 0);
+  std::iota(SortedSecs.begin(), SortedSecs.end(), 0);
   std::stable_sort(SortedSecs.begin(), SortedSecs.end(), [&](int A, int B) {
     return Clusters[B].getDensity() < Clusters[A].getDensity();
   });
@@ -179,7 +185,8 @@ void CallGraphSort::groupClusters() {
   for (int SI : SortedSecs) {
     // Clusters[SI] is the same as SecToClusters[SI] here because it has not
     // been merged into another cluster yet.
-    Cluster &C = Clusters[SI];
+    int L = findLeader(Leaders, SI);
+    Cluster &C = Clusters[L];
 
     int BestPred = -1;
     uint64_t BestWeight = 0;
@@ -195,21 +202,18 @@ void CallGraphSort::groupClusters() {
     if (BestWeight * 10 <= C.InitialWeight)
       continue;
 
-    Cluster *PredC = SecToCluster[BestPred];
-    if (PredC == &C)
+    int PredL = findLeader(Leaders, BestPred);
+    if (L == PredL)
       continue;
 
+    Cluster *PredC = &Clusters[PredL];
     if (C.Size + PredC->Size > MAX_CLUSTER_SIZE)
       continue;
 
     if (isNewDensityBad(*PredC, C))
       continue;
 
-    // NOTE: Consider using a disjoint-set to track section -> cluster mapping
-    // if this is ever slow.
-    for (int SI : C.Sections)
-      SecToCluster[SI] = PredC;
-
+    Leaders[L] = PredL;
     mergeClusters(*PredC, C);
   }
 
