@@ -1496,8 +1496,11 @@ void RelocationBaseSection::finalizeContents() {
   InputSection *SymTab = Config->Relocatable ? In.SymTab : In.DynSymTab;
   getParent()->Link = SymTab ? SymTab->getParent()->SectionIndex : 0;
 
-  if (In.RelaIplt == this || In.RelaPlt == this)
-    getParent()->Info = In.GotPlt->getParent()->SectionIndex;
+  if (In.RelaIplt == this || In.RelaPlt == this) {
+    uint32_t I = In.GotPlt->getParent()->SectionIndex;
+    if (I != UINT32_MAX)
+      getParent()->Info = I;
+  }
 }
 
 RelrBaseSection::RelrBaseSection()

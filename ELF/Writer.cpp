@@ -396,6 +396,7 @@ template <class ELFT> static void createSyntheticSections() {
           ? ".rel.dyn"
           : In.RelaPlt->Name,
       false /*Sort*/);
+  In.RelaIplt->IsIplt = true;
   Add(In.RelaIplt);
 
   In.Plt = make<PltSection>(false);

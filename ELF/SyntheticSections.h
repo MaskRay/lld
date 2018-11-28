@@ -481,11 +481,16 @@ public:
                 uint64_t OffsetInSec, Symbol *Sym, int64_t Addend, RelExpr Expr,
                 RelType Type);
   void addReloc(const DynamicReloc &Reloc);
-  bool empty() const override { return Relocs.empty(); }
+  bool empty() const override { return Relocs.empty() && !IsIplt; }
   size_t getSize() const override { return Relocs.size() * this->Entsize; }
   size_t getRelativeRelocCount() const { return NumRelativeRelocs; }
   void finalizeContents() override;
+
   int32_t DynamicTag, SizeDynamicTag;
+
+  // Used to keep empty .rela.iplt as otherwise __rela_iplt_start would have an
+  // invalid st_shndx.
+  bool IsIplt = false;
 
 protected:
   std::vector<DynamicReloc> Relocs;
