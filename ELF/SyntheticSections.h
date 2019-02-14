@@ -697,7 +697,6 @@ public:
 
   struct GdbSymbol {
     llvm::CachedHashStringRef Name;
-    std::vector<uint32_t> CuVector;
     uint32_t NameOff;
     uint32_t CuVectorOff;
   };
@@ -727,6 +726,9 @@ private:
 
   // A symbol table for this .gdb_index section.
   std::vector<GdbSymbol> Symbols;
+
+  // CU vectors in the constant pool.
+  std::vector<uint32_t> CuVectors;
 
   size_t Size;
 };

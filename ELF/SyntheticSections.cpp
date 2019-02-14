@@ -2486,9 +2486,10 @@ readPubNamesAndTypes(const LLDDwarfObj<ELFT> &Obj,
 
 // Create a list of symbols from a given list of symbol names and types
 // by uniquifying them by name.
-static std::vector<GdbIndexSection::GdbSymbol>
-createSymbols(ArrayRef<std::vector<GdbIndexSection::NameAttrEntry>> NameAttrs,
-              const std::vector<GdbIndexSection::GdbChunk> &Chunks) {
+static std::pair<std::vector<GdbIndexSection::GdbSymbol>, std::vector<uint32_t>>
+createSymbols(
+    std::vector<std::vector<GdbIndexSection::NameAttrEntry>> NameAttrs,
+    const std::vector<GdbIndexSection::GdbChunk> &Chunks) {
   typedef GdbIndexSection::GdbSymbol GdbSymbol;
   typedef GdbIndexSection::NameAttrEntry NameAttrEntry;
 
@@ -2508,13 +2509,63 @@ createSymbols(ArrayRef<std::vector<GdbIndexSection::NameAttrEntry>> NameAttrs,
   if (ThreadsEnabled)
     Concurrency =
         std::min<size_t>(PowerOf2Floor(hardware_concurrency()), NumShards);
-
-  // A sharded map to uniquify symbols by name.
-  std::vector<DenseMap<CachedHashStringRef, size_t>> Map(NumShards);
   size_t Shift = 32 - countTrailingZeros(NumShards);
 
   // Instantiate GdbSymbols while uniqufying them by name.
   std::vector<std::vector<GdbSymbol>> Symbols(NumShards);
+
+  // For each symbol get the size of its CU vector and save to CuVectorOff.
+  {
+    std::vector<DenseMap<CachedHashStringRef, size_t>> Map(NumShards);
+    parallelForEachN(0, Concurrency, [&](size_t ThreadId) {
+      for (std::vector<NameAttrEntry> &Entries : NameAttrs) {
+        for (NameAttrEntry &Ent : Entries) {
+          size_t ShardId = Ent.Name.hash() >> Shift;
+          if ((ShardId & (Concurrency - 1)) != ThreadId)
+            continue;
+
+          std::vector<GdbSymbol> &Vec = Symbols[ShardId];
+          auto R = Map[ShardId].try_emplace(Ent.Name, Vec.size());
+          if (R.second)
+            Vec.push_back({Ent.Name, 0, 0});
+          ++Vec[R.first->second].CuVectorOff;
+          // Repurpose Ent.Name.size() to be the index into Symbols[ShardId].
+          Ent.Name = {{Ent.Name.data(), R.first->second}, Ent.Name.hash()};
+        }
+      }
+    });
+  }
+
+  // CuVectors is the concatenated CU vectors of all symbols. The first value of
+  // each CU vector describes the size, other values are attributes. Accumulate
+  // CuVectorOff to get offsets in CuVectors.
+  uint32_t Off = 0;
+  for (std::vector<GdbSymbol> &Vec : Symbols)
+    for (GdbSymbol &Sym : Vec) {
+      uint32_t Next = Off + 1 + Sym.CuVectorOff;
+      Sym.CuVectorOff = Off;
+      Off = Next;
+    }
+  const uint32_t CuVectorsSize = Off;
+  std::vector<uint32_t> CuVectors(CuVectorsSize, 0);
+
+  // Fill in the first values now. Also compute NameOff.
+  uint32_t I = 0, Last;
+  Off *= 4;
+  for (std::vector<GdbSymbol> &Vec : Symbols)
+    for (GdbSymbol &Sym : Vec) {
+      Sym.NameOff = Off;
+      Off += Sym.Name.size() + 1;
+      if (I)
+        CuVectors[Last] = Sym.CuVectorOff - Last - 1;
+      Last = Sym.CuVectorOff;
+      ++I;
+    }
+  if (I)
+    CuVectors[Last] = CuVectorsSize - Last - 1;
+
+  // Fill in other elements of CuVectors. We use CuVectorOff in the counting
+  // sort manner thus we need to recompute them below.
   parallelForEachN(0, Concurrency, [&](size_t ThreadId) {
     uint32_t I = 0;
     for (ArrayRef<NameAttrEntry> Entries : NameAttrs) {
@@ -2523,45 +2574,33 @@ createSymbols(ArrayRef<std::vector<GdbIndexSection::NameAttrEntry>> NameAttrs,
         if ((ShardId & (Concurrency - 1)) != ThreadId)
           continue;
 
-        uint32_t V = Ent.CuIndexAndAttrs + CuIdxs[I];
-        size_t &Idx = Map[ShardId][Ent.Name];
-        if (Idx) {
-          Symbols[ShardId][Idx - 1].CuVector.push_back(V);
-          continue;
-        }
-
-        Idx = Symbols[ShardId].size() + 1;
-        Symbols[ShardId].push_back({Ent.Name, {V}, 0, 0});
+        // Ent.Name.size() is the index into Symbols[ShardId].
+        CuVectors[++Symbols[ShardId][Ent.Name.size()].CuVectorOff] =
+            Ent.CuIndexAndAttrs + CuIdxs[I];
       }
       ++I;
     }
   });
 
   size_t NumSymbols = 0;
-  for (ArrayRef<GdbSymbol> V : Symbols)
-    NumSymbols += V.size();
+  Off = 0;
+  for (std::vector<GdbSymbol> &Vec : Symbols) {
+    for (GdbSymbol &Sym : Vec) {
+      uint32_t Next = Off + 1 + Sym.CuVectorOff;
+      Sym.CuVectorOff = Off;
+      Off = Next;
+    }
+    NumSymbols += Vec.size();
+  }
 
   // The return type is a flattened vector, so we'll copy each vector
   // contents to Ret.
   std::vector<GdbSymbol> Ret;
   Ret.reserve(NumSymbols);
-  for (std::vector<GdbSymbol> &Vec : Symbols)
-    for (GdbSymbol &Sym : Vec)
-      Ret.push_back(std::move(Sym));
+  for (const std::vector<GdbSymbol> &Vec : Symbols)
+    Ret.insert(Ret.end(), Vec.begin(), Vec.end());
 
-  // CU vectors and symbol names are adjacent in the output file.
-  // We can compute their offsets in the output file now.
-  size_t Off = 0;
-  for (GdbSymbol &Sym : Ret) {
-    Sym.CuVectorOff = Off;
-    Off += (Sym.CuVector.size() + 1) * 4;
-  }
-  for (GdbSymbol &Sym : Ret) {
-    Sym.NameOff = Off;
-    Off += Sym.Name.size() + 1;
-  }
-
-  return Ret;
+  return {std::move(Ret), std::move(CuVectors)};
 }
 
 // Returns a newly-created .gdb_index section.
@@ -2592,7 +2631,7 @@ template <class ELFT> GdbIndexSection *GdbIndexSection::create() {
 
   auto *Ret = make<GdbIndexSection>();
   Ret->Chunks = std::move(Chunks);
-  Ret->Symbols = createSymbols(NameAttrs, Ret->Chunks);
+  std::tie(Ret->Symbols, Ret->CuVectors) = createSymbols(NameAttrs, Ret->Chunks);
   Ret->initOutputSize();
   return Ret;
 }
@@ -2643,7 +2682,7 @@ void GdbIndexSection::writeTo(uint8_t *Buf) {
       I = (I + Step) & Mask;
 
     write32le(Buf + I * 8, Sym.NameOff);
-    write32le(Buf + I * 8 + 4, Sym.CuVectorOff);
+    write32le(Buf + I * 8 + 4, Sym.CuVectorOff * 4);
   }
 
   Buf += SymtabSize * 8;
@@ -2655,13 +2694,9 @@ void GdbIndexSection::writeTo(uint8_t *Buf) {
   });
 
   // Write the CU vectors.
-  for (GdbSymbol &Sym : Symbols) {
-    write32le(Buf, Sym.CuVector.size());
+  for (uint32_t V : CuVectors) {
+    write32le(Buf, V);
     Buf += 4;
-    for (uint32_t Val : Sym.CuVector) {
-      write32le(Buf, Val);
-      Buf += 4;
-    }
   }
 }
 
