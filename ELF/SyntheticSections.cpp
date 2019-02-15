@@ -2497,42 +2497,83 @@ template <class ELFT> GdbIndexSection *GdbIndexSection::create() {
       S->Live = false;
 
   std::vector<GdbChunk> Chunks(Sections.size());
-  std::vector<GdbSymbol> Symbols;
 
-  DenseMap<CachedHashStringRef, uint32_t> Map;
-  std::vector<uint32_t> CuIdxs(Chunks.size());
+  const size_t ShardSize = 64;
+  const size_t Shift = 32 - countTrailingZeros(ShardSize);
+  const size_t Concurrency =
+      ThreadsEnabled
+          ? std::min<size_t>(PowerOf2Floor(hardware_concurrency()), ShardSize)
+          : 1;
+  std::vector<std::vector<GdbSymbol>> SymbolShards(ShardSize);
 
+  std::vector<std::pair<size_t, size_t>> SectionSizes(Sections.size());
+  std::vector<uint32_t> CuIdxs(Sections.size());
   parallelForEachN(0, Sections.size(), [&](size_t I) {
     ObjFile<ELFT> *File = Sections[I]->getFile<ELFT>();
     DWARFContext Dwarf(make_unique<LLDDwarfObj<ELFT>>(File));
     Chunks[I].Sec = Sections[I];
     Chunks[I].CompilationUnits = readCuList(Dwarf);
     Chunks[I].AddressAreas = readAddressAreas(Dwarf, Sections[I]);
+
+    // We partition sections into shards below and expect each shard to have
+    // balanced workload. This is achieved by iterating sections ordered by
+    // size. The size of .debug_gnu_pub{names,types} is a good estimate of the
+    // number of its containing NameAttrEntry.
+    auto &Obj = Dwarf.getDWARFObj();
+    SectionSizes[I] = {Obj.getGnuPubNamesSection().Data.size() +
+                           Obj.getGnuPubTypesSection().Data.size(),
+                       I};
   });
   uint32_t CuIdx = 0;
-  for (uint32_t I = 0, E = Chunks.size(); I != E; ++I) {
+  for (uint32_t I = 0, E = Sections.size(); I != E; ++I) {
     CuIdxs[I] = CuIdx;
     CuIdx += Chunks[I].CompilationUnits.size();
   }
+  llvm::sort(SectionSizes);
 
-  std::mutex Mutex;
-  parallelForEachN(0, Sections.size(), [&](size_t I) {
-    ObjFile<ELFT> *File = Sections[I]->getFile<ELFT>();
-    DWARFContext Dwarf(make_unique<LLDDwarfObj<ELFT>>(File));
-    std::vector<NameAttrEntry> NameAttrs;
-    readPubNamesAndTypes<ELFT>(
-        static_cast<const LLDDwarfObj<ELFT> &>(Dwarf.getDWARFObj()),
-        Chunks[I].CompilationUnits, NameAttrs);
-    std::lock_guard<std::mutex> Lock(Mutex);
-    for (NameAttrEntry &Ent : NameAttrs) {
-      auto R = Map.try_emplace(Ent.Name, Symbols.size());
-      uint32_t V = Ent.CuIndexAndAttrs + CuIdxs[I];
-      if (R.second)
-        Symbols.push_back({Ent.Name, {V}, 0, 0});
-      else
-        Symbols[R.first->second].CuVector.push_back(V);
+  {
+    std::vector<DenseMap<CachedHashStringRef, uint32_t>> MapShards(ShardSize);
+    std::vector<std::vector<NameAttrEntry>> NameAttrShards(ShardSize);
+    for (size_t B = 0, E = Sections.size(), NextB; B != E; B = NextB) {
+      NextB = std::min(B + ShardSize, E);
+      parallelForEachN(B, NextB, [&](size_t J) {
+        size_t I = SectionSizes[J].second;
+        ObjFile<ELFT> *File = Sections[I]->getFile<ELFT>();
+        DWARFContext Dwarf(make_unique<LLDDwarfObj<ELFT>>(File));
+        readPubNamesAndTypes<ELFT>(
+            static_cast<const LLDDwarfObj<ELFT> &>(Dwarf.getDWARFObj()),
+            Chunks[I].CompilationUnits, NameAttrShards[J - B]);
+      });
+
+      parallelForEachN(0, Concurrency, [&](size_t ThreadId) {
+        for (size_t J = B; J != NextB; ++J) {
+          size_t I = SectionSizes[J].second;
+          for (NameAttrEntry &Ent : NameAttrShards[J - B]) {
+            size_t ShardId = Ent.Name.hash() >> Shift;
+            if ((ShardId & (Concurrency - 1)) != ThreadId)
+              continue;
+
+            std::vector<GdbSymbol> &Symbols = SymbolShards[ShardId];
+            uint32_t V = Ent.CuIndexAndAttrs + CuIdxs[I];
+            auto R = MapShards[ShardId].try_emplace(Ent.Name, Symbols.size());
+            if (R.second)
+              Symbols.push_back({Ent.Name, {V}, 0, 0});
+            else
+              Symbols[R.first->second].CuVector.push_back(V);
+          }
+        }
+      });
     }
-  });
+  }
+
+  size_t NumSymbols = 0;
+  for (std::vector<GdbSymbol> &V : SymbolShards)
+    NumSymbols += V.size();
+
+  std::vector<GdbSymbol> Symbols;
+  Symbols.reserve(NumSymbols);
+  for (std::vector<GdbSymbol> &V : SymbolShards)
+    Symbols.insert(Symbols.end(), V.begin(), V.end());
 
   // CU vectors and symbol names are adjacent in the output file.
   // We can compute their offsets in the output file now.
