@@ -45,6 +45,8 @@
 #include "SymbolTable.h"
 #include "Symbols.h"
 
+#include <numeric>
+
 using namespace llvm;
 using namespace lld;
 using namespace lld::elf;
@@ -56,7 +58,7 @@ struct Edge {
 };
 
 struct Cluster {
-  Cluster(int Sec, size_t S) : Sections{Sec}, Size(S) {}
+  Cluster(int Sec, size_t S) : Next(Sec), Prev(Sec), Size(S) {}
 
   double getDensity() const {
     if (Size == 0)
@@ -64,7 +66,8 @@ struct Cluster {
     return double(Weight) / double(Size);
   }
 
-  std::vector<int> Sections;
+  int Next;
+  int Prev;
   size_t Size = 0;
   uint64_t Weight = 0;
   uint64_t InitialWeight = 0;
@@ -80,8 +83,6 @@ public:
 private:
   std::vector<Cluster> Clusters;
   std::vector<const InputSectionBase *> Sections;
-
-  void groupClusters();
 };
 
 // Maximum ammount the combined cluster density can be worse than the original
@@ -151,80 +152,84 @@ static bool isNewDensityBad(Cluster &A, Cluster &B) {
   return NewDensity < A.getDensity() / MAX_DENSITY_DEGRADATION;
 }
 
-static void mergeClusters(Cluster &Into, Cluster &From) {
-  Into.Sections.insert(Into.Sections.end(), From.Sections.begin(),
-                       From.Sections.end());
+// Find the leader of V's belonged cluster (represented as an equivalence
+// class). We apply union-find path-halving technique (simple to implement) in
+// the meantime as it decreases depths and the time complexity.
+static int getLeader(std::vector<int> &Leaders, int V) {
+  while (Leaders[V] != V) {
+    Leaders[V] = Leaders[Leaders[V]];
+    V = Leaders[V];
+  }
+  return V;
+}
+
+static void mergeClusters(std::vector<Cluster> &CS, Cluster &Into, int IntoIdx,
+                          Cluster &From, int FromIdx) {
+  int Tail1 = Into.Prev, Tail2 = From.Prev;
+  Into.Prev = Tail2;
+  CS[Tail2].Next = IntoIdx;
+  From.Prev = Tail1;
+  CS[Tail1].Next = FromIdx;
   Into.Size += From.Size;
   Into.Weight += From.Weight;
-  From.Sections.clear();
   From.Size = 0;
   From.Weight = 0;
 }
 
 // Group InputSections into clusters using the Call-Chain Clustering heuristic
 // then sort the clusters by density.
-void CallGraphSort::groupClusters() {
-  std::vector<int> SortedSecs(Clusters.size());
-  std::vector<Cluster *> SecToCluster(Clusters.size());
+DenseMap<const InputSectionBase *, int> CallGraphSort::run() {
+  std::vector<int> Sorted(Clusters.size());
+  std::vector<int> Leaders(Clusters.size());
 
-  for (size_t I = 0; I < Clusters.size(); ++I) {
-    SortedSecs[I] = I;
-    SecToCluster[I] = &Clusters[I];
-  }
-
-  std::stable_sort(SortedSecs.begin(), SortedSecs.end(), [&](int A, int B) {
-    return Clusters[B].getDensity() < Clusters[A].getDensity();
+  std::iota(Leaders.begin(), Leaders.end(), 0);
+  std::iota(Sorted.begin(), Sorted.end(), 0);
+  std::stable_sort(Sorted.begin(), Sorted.end(), [&](int A, int B) {
+    return Clusters[A].getDensity() > Clusters[B].getDensity();
   });
 
-  for (int SI : SortedSecs) {
-    // Clusters[SI] is the same as SecToClusters[SI] here because it has not
-    // been merged into another cluster yet.
-    Cluster &C = Clusters[SI];
+  for (int L : Sorted) {
+    // The cluster index is the same as the index of its leader here because
+    // Clusters[L] has not been merged into another cluster yet.
+    Cluster &C = Clusters[L];
 
     // Don't consider merging if the edge is unlikely.
     if (C.BestPred.From == -1 || C.BestPred.Weight * 10 <= C.InitialWeight)
       continue;
 
-    Cluster *PredC = SecToCluster[C.BestPred.From];
-    if (PredC == &C)
+    int PredL = getLeader(Leaders, C.BestPred.From);
+    if (L == PredL)
       continue;
 
+    Cluster *PredC = &Clusters[PredL];
     if (C.Size + PredC->Size > MAX_CLUSTER_SIZE)
       continue;
 
     if (isNewDensityBad(*PredC, C))
       continue;
 
-    // NOTE: Consider using a disjoint-set to track section -> cluster mapping
-    // if this is ever slow.
-    for (int SI : C.Sections)
-      SecToCluster[SI] = PredC;
-
-    mergeClusters(*PredC, C);
+    Leaders[L] = PredL;
+    mergeClusters(Clusters, *PredC, PredL, C, L);
   }
 
-  // Remove empty or dead nodes. Invalidates all cluster indices.
-  llvm::erase_if(Clusters, [](const Cluster &C) {
-    return C.Size == 0 || C.Sections.empty();
+  // Sort remaining non-empty clusters by density.
+  Sorted.clear();
+  for (int I = 0, E = (int)Clusters.size(); I != E; ++I)
+    if (Clusters[I].Size > 0)
+      Sorted.push_back(I);
+  std::stable_sort(Sorted.begin(), Sorted.end(), [&](int A, int B) {
+    return Clusters[A].getDensity() > Clusters[B].getDensity();
   });
 
-  // Sort by density.
-  std::stable_sort(Clusters.begin(), Clusters.end(),
-                   [](const Cluster &A, const Cluster &B) {
-                     return A.getDensity() > B.getDensity();
-                   });
-}
-
-DenseMap<const InputSectionBase *, int> CallGraphSort::run() {
-  groupClusters();
-
-  // Generate order.
   DenseMap<const InputSectionBase *, int> OrderMap;
-  ssize_t CurOrder = 1;
-
-  for (const Cluster &C : Clusters)
-    for (int SecIndex : C.Sections)
-      OrderMap[Sections[SecIndex]] = CurOrder++;
+  int CurOrder = 1;
+  for (int L : Sorted)
+    for (int I = L;;) {
+      OrderMap[Sections[I]] = CurOrder++;
+      I = Clusters[I].Next;
+      if (I == L)
+        break;
+    }
 
   return OrderMap;
 }
