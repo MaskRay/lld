@@ -4,28 +4,23 @@
 
 # RUN: llvm-mc -filetype=obj -triple=x86_64-pc-linux %s -o %t.o
 # RUN: ld.lld --export-dynamic %t.o -o %t
-# RUN: llvm-readobj --dyn-syms %t | FileCheck %s
+# RUN: llvm-readelf -r %t | FileCheck --check-prefix=NOREL %s
+# RUN: llvm-readelf -x .text -x .data %t | FileCheck --check-prefix=HEX %s
+# RUN: llvm-readobj --dyn-syms %t | FileCheck --implicit-check-not=foo /dev/null
 
-# CHECK:      DynamicSymbols [
-# CHECK-NEXT:   Symbol {
-# CHECK-NEXT:     Name:
-# CHECK-NEXT:     Value: 0x0
-# CHECK-NEXT:     Size: 0
-# CHECK-NEXT:     Binding: Local (0x0)
-# CHECK-NEXT:     Type: None (0x0)
-# CHECK-NEXT:     Other: 0
-# CHECK-NEXT:     Section: Undefined (0x0)
-# CHECK-NEXT:   }
-# CHECK-NEXT:   Symbol {
-# CHECK-NEXT:     Name: foo
-# CHECK-NEXT:     Value: 0x0
-# CHECK-NEXT:     Size: 0
-# CHECK-NEXT:     Binding: Weak (0x2)
-# CHECK-NEXT:     Type: None (0x0)
-# CHECK-NEXT:     Other: 0
-# CHECK-NEXT:     Section: Undefined (0x0)
-# CHECK-NEXT:  }
-# CHECK-NEXT: ]
+# NOREL: no relocations
 
+## gABI leaves the behavior of weak undefined references implementation defined.
+## We choose to resolve them statically and not create a dynamic relocation for
+## implementation simplicity. This also matches ld.bfd and gold.
+
+# HEX: 0x{{[0-9a-f]+}} 00000000 00000000
+# HEX: 0x{{[0-9a-f]+}} 00000000 00000000
+
+        .text
+        .weak foo
+        .quad foo
+
+        .data
         .weak foo
         .quad foo
