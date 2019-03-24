@@ -152,18 +152,19 @@ template <class ELFT> void SymbolTable::addCombinedLTOObject() {
 
 // Set a flag for --trace-symbol so that we can print out a log message
 // if a new symbol with the same name is inserted into the symbol table.
+// -1/-2 is used as DenseMap empty/tomstone key, so we choose -3.
 void SymbolTable::trace(StringRef Name) {
-  SymMap.insert({CachedHashStringRef(Name), -1});
+  SymMap.try_emplace(hash(Name), (Symbol *)-3);
 }
 
 void SymbolTable::wrap(Symbol *Sym, Symbol *Real, Symbol *Wrap) {
   // Swap symbols as instructed by -wrap.
-  int &Idx1 = SymMap[CachedHashStringRef(Sym->getName())];
-  int &Idx2 = SymMap[CachedHashStringRef(Real->getName())];
-  int &Idx3 = SymMap[CachedHashStringRef(Wrap->getName())];
+  Symbol *&S1 = SymMap[hash(Sym->getName())];
+  Symbol *&S2 = SymMap[hash(Real->getName())];
+  Symbol *&S3 = SymMap[hash(Wrap->getName())];
 
-  Idx2 = Idx1;
-  Idx1 = Idx3;
+  S2 = S1;
+  S1 = S3;
 
   // Now renaming is complete. No one refers Real symbol. We could leave
   // Real as-is, but if Real is written to the symbol table, that may
@@ -193,19 +194,17 @@ std::pair<Symbol *, bool> SymbolTable::insertName(StringRef Name) {
   if (Pos != StringRef::npos && Pos + 1 < Name.size() && Name[Pos + 1] == '@')
     Name = Name.take_front(Pos);
 
-  auto P = SymMap.insert({CachedHashStringRef(Name), (int)SymVector.size()});
-  int &SymIndex = P.first->second;
+  auto P = SymMap.insert({hash(Name), nullptr});
   bool IsNew = P.second;
   bool Traced = false;
 
-  if (SymIndex == -1) {
-    SymIndex = SymVector.size();
+  if (P.first->second == (Symbol *)-3) {
     IsNew = true;
     Traced = true;
   }
 
   if (!IsNew)
-    return {SymVector[SymIndex], false};
+    return {P.first->second, false};
 
   auto *Sym = reinterpret_cast<Symbol *>(make<SymbolUnion>());
   Sym->SymbolKind = Symbol::PlaceholderKind;
@@ -215,7 +214,7 @@ std::pair<Symbol *, bool> SymbolTable::insertName(StringRef Name) {
   Sym->CanInline = true;
   Sym->Traced = Traced;
   Sym->VersionId = Config->DefaultSymbolVersion;
-  SymVector.push_back(Sym);
+  P.first->second = Sym;
   return {Sym, true};
 }
 
@@ -530,12 +529,10 @@ Symbol *SymbolTable::addBitcode(StringRef Name, uint8_t Binding,
 }
 
 Symbol *SymbolTable::find(StringRef Name) {
-  auto It = SymMap.find(CachedHashStringRef(Name));
-  if (It == SymMap.end())
+  auto It = SymMap.find(hash(Name));
+  if (It == SymMap.end() || It->second == (Symbol *)-3)
     return nullptr;
-  if (It->second == -1)
-    return nullptr;
-  return SymVector[It->second];
+  return It->second;
 }
 
 template <class ELFT>
@@ -615,7 +612,7 @@ template <class ELFT> void SymbolTable::fetchLazy(Symbol *Sym) {
 StringMap<std::vector<Symbol *>> &SymbolTable::getDemangledSyms() {
   if (!DemangledSyms) {
     DemangledSyms.emplace();
-    for (Symbol *Sym : SymVector) {
+    for (Symbol *Sym : getSymbols()) {
       if (!Sym->isDefined())
         continue;
       if (Optional<std::string> S = demangleItanium(Sym->getName()))
@@ -647,7 +644,7 @@ std::vector<Symbol *> SymbolTable::findAllByVersion(SymbolVersion Ver) {
     return Res;
   }
 
-  for (Symbol *Sym : SymVector)
+  for (Symbol *Sym : getSymbols())
     if (Sym->isDefined() && M.match(Sym->getName()))
       Res.push_back(Sym);
   return Res;
@@ -756,7 +753,7 @@ void SymbolTable::scanVersionScript() {
   // Symbol themselves might know their versions because symbols
   // can contain versions in the form of <name>@<version>.
   // Let them parse and update their names to exclude version suffix.
-  for (Symbol *Sym : SymVector)
+  for (Symbol *Sym : getSymbols())
     Sym->parseSymbolVersion();
 }
 

@@ -14,6 +14,8 @@
 #include "lld/Common/Strings.h"
 #include "llvm/ADT/CachedHashString.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/iterator.h"
+#include "llvm/Support/xxhash.h"
 
 namespace lld {
 namespace elf {
@@ -38,7 +40,19 @@ public:
   template <class ELFT> void addCombinedLTOObject();
   void wrap(Symbol *Sym, Symbol *Real, Symbol *Wrap);
 
-  ArrayRef<Symbol *> getSymbols() const { return SymVector; }
+  struct SymbolIterator
+      : llvm::iterator_adaptor_base<
+            SymbolIterator,
+            llvm::DenseMap<llvm::CachedHashStringRef, Symbol *>::iterator> {
+    SymbolIterator(
+        llvm::DenseMap<llvm::CachedHashStringRef, Symbol *>::iterator u)
+        : iterator_adaptor_base(u) {}
+    Symbol *operator*() const { return this->I->second; }
+  };
+
+  llvm::iterator_range<SymbolIterator> getSymbols() {
+    return {SymbolIterator(SymMap.begin()), SymbolIterator(SymMap.end())};
+  }
 
   template <class ELFT>
   Symbol *addUndefined(StringRef Name, uint8_t Binding, uint8_t StOther,
@@ -95,14 +109,14 @@ private:
   void assignWildcardVersion(SymbolVersion Ver, uint16_t VersionId);
 
   // The order the global symbols are in is not defined. We can use an arbitrary
-  // order, but it has to be reproducible. That is true even when cross linking.
-  // The default hashing of StringRef produces different results on 32 and 64
-  // bit systems so we use a map to a vector. That is arbitrary, deterministic
-  // but a bit inefficient.
-  // FIXME: Experiment with passing in a custom hashing or sorting the symbols
-  // once symbol resolution is finished.
-  llvm::DenseMap<llvm::CachedHashStringRef, int> SymMap;
-  std::vector<Symbol *> SymVector;
+  // order, but it has to be reproducible across platforms. The default hashing
+  // uses llvm::hash_value which is not supposed to be stable or predictable
+  // across processes or executions. Use the predictable xxHash64 instead.
+  llvm::DenseMap<llvm::CachedHashStringRef, Symbol *> SymMap;
+
+  static llvm::CachedHashStringRef hash(StringRef Name) {
+    return {Name, (uint32_t)llvm::xxHash64(Name)};
+  }
 
   // Comdat groups define "link once" sections. If two comdat groups have the
   // same name, only one of them is linked, and the other is ignored. This set
