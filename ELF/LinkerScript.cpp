@@ -159,56 +159,47 @@ static bool shouldDefineSym(SymbolAssignment *Cmd) {
   return false;
 }
 
-// This function is called from processSectionCommands,
-// while we are fixing the output section layout.
-void LinkerScript::addSymbol(SymbolAssignment *Cmd) {
+static void addSymbol(SymbolAssignment *Cmd, bool Declare) {
   if (!shouldDefineSym(Cmd))
     return;
 
-  // Define a symbol.
   Symbol *Sym;
   uint8_t Visibility = Cmd->Hidden ? STV_HIDDEN : STV_DEFAULT;
   std::tie(Sym, std::ignore) = Symtab->insert(Cmd->Name, Visibility,
                                               /*CanOmitFromDynSym*/ false,
                                               /*File*/ nullptr);
-  ExprValue Value = Cmd->Expression();
-  SectionBase *Sec = Value.isAbsolute() ? nullptr : Value.Sec;
+  SectionBase *Sec = nullptr;
+  uint64_t SymValue = 0;
+  if (Declare) {
+    // Create a placeholder symbol if needed. Set Provide to false so that when
+    // the function is called again to define the symbol, it will not be skipped
+    // by shouldDefineSym().
+    Cmd->Provide = false;
+  } else {
+    // This is called from processSectionCommands, while we are fixing the
+    // output section layout.
+    ExprValue Value = Cmd->Expression();
+    Sec = Value.isAbsolute() ? nullptr : Value.Sec;
 
-  // When this function is called, section addresses have not been
-  // fixed yet. So, we may or may not know the value of the RHS
-  // expression.
-  //
-  // For example, if an expression is `x = 42`, we know x is always 42.
-  // However, if an expression is `x = .`, there's no way to know its
-  // value at the moment.
-  //
-  // We want to set symbol values early if we can. This allows us to
-  // use symbols as variables in linker scripts. Doing so allows us to
-  // write expressions like this: `alignment = 16; . = ALIGN(., alignment)`.
-  uint64_t SymValue = Value.Sec ? 0 : Value.getValue();
+    // When this function is called, section addresses have not been
+    // fixed yet. So, we may or may not know the value of the RHS
+    // expression.
+    //
+    // For example, if an expression is `x = 42`, we know x is always 42.
+    // However, if an expression is `x = .`, there's no way to know its
+    // value at the moment.
+    //
+    // We want to set symbol values early if we can. This allows us to
+    // use symbols as variables in linker scripts. Doing so allows us to
+    // write expressions like this: `alignment = 16; . = ALIGN(., alignment)`.
+    if (!Value.Sec)
+      SymValue = Value.getValue();
+  }
 
   replaceSymbol<Defined>(Sym, nullptr, Cmd->Name, STB_GLOBAL, Visibility,
                          STT_NOTYPE, SymValue, 0, Sec);
-  Cmd->Sym = cast<Defined>(Sym);
-}
-
-// This function is called from LinkerScript::declareSymbols.
-// It creates a placeholder symbol if needed.
-static void declareSymbol(SymbolAssignment *Cmd) {
-  if (!shouldDefineSym(Cmd))
-    return;
-
-  // We can't calculate final value right now.
-  Symbol *Sym;
-  uint8_t Visibility = Cmd->Hidden ? STV_HIDDEN : STV_DEFAULT;
-  std::tie(Sym, std::ignore) = Symtab->insert(Cmd->Name, Visibility,
-                                              /*CanOmitFromDynSym*/ false,
-                                              /*File*/ nullptr);
-  replaceSymbol<Defined>(Sym, nullptr, Cmd->Name, STB_GLOBAL, Visibility,
-                         STT_NOTYPE, 0, 0, nullptr);
-  Cmd->Sym = cast<Defined>(Sym);
-  Cmd->Provide = false;
   Sym->ScriptDefined = true;
+  Cmd->Sym = cast<Defined>(Sym);
 }
 
 // This method is used to handle INSERT AFTER statement. Here we rebuild
@@ -246,7 +237,7 @@ void LinkerScript::declareSymbols() {
   assert(!Ctx);
   for (BaseCommand *Base : SectionCommands) {
     if (auto *Cmd = dyn_cast<SymbolAssignment>(Base)) {
-      declareSymbol(Cmd);
+      addSymbol(Cmd, true);
       continue;
     }
 
@@ -259,7 +250,7 @@ void LinkerScript::declareSymbols() {
       continue;
     for (BaseCommand *Base2 : Sec->SectionCommands)
       if (auto *Cmd = dyn_cast<SymbolAssignment>(Base2))
-        declareSymbol(Cmd);
+        addSymbol(Cmd, true);
   }
 }
 
@@ -470,7 +461,7 @@ void LinkerScript::processSectionCommands() {
   for (BaseCommand *Base : SectionCommands) {
     // Handle symbol assignments outside of any output section.
     if (auto *Cmd = dyn_cast<SymbolAssignment>(Base)) {
-      addSymbol(Cmd);
+      addSymbol(Cmd, false);
       continue;
     }
 
@@ -503,7 +494,7 @@ void LinkerScript::processSectionCommands() {
       // ".foo : { ...; bar = .; }". Handle them.
       for (BaseCommand *Base : Sec->SectionCommands)
         if (auto *OutCmd = dyn_cast<SymbolAssignment>(Base))
-          addSymbol(OutCmd);
+          addSymbol(OutCmd, false);
 
       // Handle subalign (e.g. ".foo : SUBALIGN(32) { ... }"). If subalign
       // is given, input sections are aligned to that value, whether the
