@@ -632,6 +632,7 @@ static uint64_t getRelocTargetVA(const InputFile *File, RelType Type, int64_t A,
   case R_GOTPLTONLY_PC:
     return In.GotPlt->getVA() + A - P;
   case R_GOTREL:
+  case R_PPC64_RELAX_TOC:
     return Sym.getVA(A) - In.Got->getVA();
   case R_GOTPLTREL:
     return Sym.getVA(A) - In.GotPlt->getVA();
@@ -878,6 +879,7 @@ void InputSectionBase::relocate(uint8_t *Buf, uint8_t *BufEnd) {
 void InputSectionBase::relocateAlloc(uint8_t *Buf, uint8_t *BufEnd) {
   assert(Flags & SHF_ALLOC);
   const unsigned Bits = Config->Wordsize * 8;
+  unsigned TocRelIndex = 0;
 
   for (const Relocation &Rel : Relocations) {
     uint64_t Offset = Rel.Offset;
@@ -895,7 +897,14 @@ void InputSectionBase::relocateAlloc(uint8_t *Buf, uint8_t *BufEnd) {
     switch (Expr) {
     case R_RELAX_GOT_PC:
     case R_RELAX_GOT_PC_NOPIC:
-      Target->relaxGot(BufLoc, TargetVA);
+      Target->relaxGot(BufLoc, Type, TargetVA);
+      break;
+    case R_PPC64_RELAX_TOC:
+      // R_PPC64_RELAX_TOC relocations have been sortd by addend. TocRelIndex is
+      // the index into .rela.toc which get increased while we are resolving
+      // R_PPC64_RELAX_TOC relocations.
+      if (!tryRelaxTocPPC64(Type, Rel, TocRelIndex, BufLoc))
+        Target->relocateOne(BufLoc, Type, TargetVA);
       break;
     case R_RELAX_TLS_IE_TO_LE:
       Target->relaxTlsIeToLe(BufLoc, Type, TargetVA);

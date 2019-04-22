@@ -103,6 +103,67 @@ bool elf::isPPC64SmallCodeModelTocReloc(RelType Type) {
   return Type == R_PPC64_TOC16 || Type == R_PPC64_TOC16_DS;
 }
 
+// Find the relocation in .rela.toc with matching offset.
+template <typename ELFT>
+static std::pair<Defined *, int64_t>
+getRelaTocSymAndAddend(InputSectionBase *TocSec, unsigned &TocRelIdx,
+                       uint64_t Offset) {
+  if (!TocSec->NumRelocations)
+    return {};
+  ArrayRef<typename ELFT::Rela> Relas = TocSec->template relas<ELFT>();
+  while (TocRelIdx < Relas.size() && Relas[TocRelIdx].r_offset < Offset)
+    ++TocRelIdx;
+  if (!(TocRelIdx < Relas.size() && Relas[TocRelIdx].r_offset == Offset))
+    return {};
+  Symbol &Sym = TocSec->getFile<ELFT>()->getRelocTargetSym(Relas[TocRelIdx]);
+  return {dyn_cast<Defined>(&Sym), getAddend<ELFT>(Relas[TocRelIdx])};
+}
+
+// Loading a symbol address from .toc (e.g. "addis r,2,foo@toc@ha;
+// ld r,foo@toc@l(r)") can be relaxed to compute the address using an offset
+// relative to the toc pointer (e.g. "addis r,2,offset; addi r,r,offset" or
+// "nop; addi r,2,offset").
+//
+// This requires the symbol to be defined, non-preemptable and addressable with
+// a 32-bit signed offset from the toc pointer.
+bool elf::tryRelaxTocPPC64(RelType Type, const Relocation &Rel,
+                           unsigned &TocRelIdx, uint8_t *BufLoc) {
+  assert(Config->TocOptimize);
+  if (Rel.Addend < 0)
+    return false;
+
+  // If the symbol is not the .toc section, this isn't a toc-indirection.
+  Defined *DefSym = dyn_cast<Defined>(Rel.Sym);
+  if (!DefSym || !DefSym->isSection() || DefSym->Section->Name != ".toc")
+    return false;
+
+  Defined *D;
+  int64_t Addend;
+  auto *TocISB = cast<InputSectionBase>(DefSym->Section);
+  std::tie(D, Addend) =
+      Config->IsLE
+          ? getRelaTocSymAndAddend<ELF64LE>(TocISB, TocRelIdx, Rel.Addend)
+          : getRelaTocSymAndAddend<ELF64BE>(TocISB, TocRelIdx, Rel.Addend);
+
+  // Only non-preemptable defined symbols can be relaxed.
+  if (!D || D->IsPreemptible)
+    return false;
+
+  // Because we only have the 2 instructions of the got-indirect access sequence
+  // to rewrite, we can only relax if the symbol definition is within 32 bits of
+  // the TOC base-pointer.
+  uint64_t SymVA = D->getVA(Addend);
+  if (!isInt<32>(SymVA - getPPC64TocBase()))
+    return false;
+
+  // Safe to relax, let the target callback perform the actual relaxation.
+  // Note that we use the offset between the symbols VA and the .got VA as the
+  // relocation value since relocateOne will perform the adjustment by the TOC
+  // bias.
+  Target->relaxGot(BufLoc, Type, SymVA - In.Got->getVA());
+  return true;
+}
+
 namespace {
 class PPC64 final : public TargetInfo {
 public:
@@ -121,6 +182,7 @@ public:
   bool inBranchRange(RelType Type, uint64_t Src, uint64_t Dst) const override;
   RelExpr adjustRelaxExpr(RelType Type, const uint8_t *Data,
                           RelExpr Expr) const override;
+  void relaxGot(uint8_t *Loc, RelType Type, uint64_t Val) const override;
   void relaxTlsGdToIe(uint8_t *Loc, RelType Type, uint64_t Val) const override;
   void relaxTlsGdToLe(uint8_t *Loc, RelType Type, uint64_t Val) const override;
   void relaxTlsLdToLe(uint8_t *Loc, RelType Type, uint64_t Val) const override;
@@ -268,6 +330,26 @@ uint32_t PPC64::calcEFlags() const {
       error(toString(F) + ": unrecognized e_flags: " + Twine(Flag));
   }
   return 2;
+}
+
+void PPC64::relaxGot(uint8_t *Loc, RelType Type, uint64_t Val) const {
+  switch (Type) {
+  case R_PPC64_TOC16_HA:
+    relocateOne(Loc, Type, Val);
+    break;
+  case R_PPC64_TOC16_LO_DS: {
+    // Convert "ld reg, foo@toc@l(reg)" to "addi reg, reg, offset",
+    // "lwa reg, foo@toc@l(reg)" to "lwa reg, offset(2)", etc.
+    uint32_t Instr = readInstrFromHalf16(Loc);
+    if (getPrimaryOpCode(Instr) != LD)
+      error("expected a 'ld' for got-indirect to toc-relative relaxing");
+    writeInstrFromHalf16(Loc, (Instr & 0x03FFFFFF) | 0x38000000);
+    relocateOne(Loc, R_PPC64_TOC16_LO, Val);
+    break;
+  }
+  default:
+    llvm_unreachable("unexpected relocation type");
+  }
 }
 
 void PPC64::relaxTlsGdToLe(uint8_t *Loc, RelType Type, uint64_t Val) const {
@@ -439,11 +521,12 @@ RelExpr PPC64::getRelExpr(RelType Type, const Symbol &S,
     return R_GOT_OFF;
   case R_PPC64_TOC16:
   case R_PPC64_TOC16_DS:
-  case R_PPC64_TOC16_HA:
   case R_PPC64_TOC16_HI:
   case R_PPC64_TOC16_LO:
-  case R_PPC64_TOC16_LO_DS:
     return R_GOTREL;
+  case R_PPC64_TOC16_HA:
+  case R_PPC64_TOC16_LO_DS:
+    return Config->TocOptimize ? R_PPC64_RELAX_TOC : R_GOTREL;
   case R_PPC64_TOC:
     return R_PPC_TOC;
   case R_PPC64_REL14:
