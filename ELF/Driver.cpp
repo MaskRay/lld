@@ -779,6 +779,7 @@ static void readConfigs(opt::InputArgList &Args) {
   Config->AllowShlibUndefined =
       Args.hasFlag(OPT_allow_shlib_undefined, OPT_no_allow_shlib_undefined,
                    Args.hasArg(OPT_shared));
+  Config->AndroidTls = Args.hasArg(OPT_android_tls);
   Config->AuxiliaryList = args::getStrings(Args, OPT_auxiliary);
   Config->Bsymbolic = Args.hasArg(OPT_Bsymbolic);
   Config->BsymbolicFunctions = Args.hasArg(OPT_Bsymbolic_functions);

@@ -122,6 +122,7 @@ struct Configuration {
   llvm::MapVector<std::pair<const InputSectionBase *, const InputSectionBase *>,
                   uint64_t>
       CallGraphProfile;
+  bool AndroidTls;
   bool AllowMultipleDefinition;
   bool AllowShlibUndefined;
   bool AndroidPackDynRelocs;

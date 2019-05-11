@@ -16,6 +16,10 @@ multiclass B<string name, string help1, string help2> {
   def no_ # NAME: Flag<["--", "-"], "no-" # name>, HelpText<help2>;
 }
 
+def android_tls
+    : Flag<["--"], "android-tls">,
+      HelpText<"Use Android Bionic compatible TLS layout on ARM/AArch64">;
+
 defm auxiliary: Eq<"auxiliary", "Set DT_AUXILIARY field to the specified name">;
 
 def Bsymbolic: F<"Bsymbolic">, HelpText<"Bind defined symbols locally">;
