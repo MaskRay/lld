@@ -61,7 +61,7 @@ x:
 // SEC-NEXT:   SHF_TLS
 // SEC-NEXT:   SHF_WRITE
 // SEC-NEXT: ]
-// SEC-NEXT: Address: 0x12004
+// SEC-NEXT: Address: 0x12020
 // SEC:      Size: 8
 
 // SEC: Dynamic Relocations {
@@ -73,6 +73,6 @@ x:
 // offset of x from Thread pointer = (TcbSize + 0x0 = 0x20)
 // CHECK-NEXT:   11000:         20 00 00 00
 // offset of z from Thread pointer = (TcbSize + 0x8 = 0x28)
-// CHECK-NEXT:   11004:         28 00 00 00
-// offset of y from Thread pointer = (TcbSize + 0x4 = 0x24)
-// CHECK-NEXT:   11008:         24 00 00 00
+// CHECK-NEXT:   11004:         44 00 00 00
+// offset of y from Thread pointer = (TcbSize + 0x24 = 0x44)
+// CHECK-NEXT:   11008:         40 00 00 00

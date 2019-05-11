@@ -120,6 +120,21 @@ void OutputSection::addSection(InputSection *IS) {
 
   Alignment = std::max(Alignment, IS->Alignment);
 
+  // On ARM/AArch64, overalign PT_TLS to 8 words to make the TLS layout
+  // compatible with Android Bionic. For simplicity, this overalignment is also
+  // done on other operating systems. However, this may cause
+  // p_vaddr%p_align!=0, which can cause crashes on glibc (and other ld.so
+  // implementations after they fix the bug). To fix that, consider two cases:
+  //
+  // 1) If .tdata exists, it will be the first section of the RW PT_LOAD
+  // (non-TLS sections in the segment have higher ranks due to RF_NOT_TLS) and
+  // it will be page aligned. p_vaddr%p_align==0 follows naturally.
+  // 2) If .tdata doesn't exist, .tbss will not be placed in a RW PT_LOAD.
+  // Overalign .tbss to ensure p_vaddr%p_align==0.
+  if (Type == SHT_NOBITS && (Flags & ELF::SHF_TLS) && !Config->Shared &&
+      (Config->EMachine == EM_ARM || Config->EMachine == EM_AARCH64))
+    Alignment = std::max<uint32_t>(Alignment, Config->Wordsize * 8);
+
   // If this section contains a table of fixed-size entries, sh_entsize
   // holds the element size. If it contains elements of different size we
   // set sh_entsize to 0.
