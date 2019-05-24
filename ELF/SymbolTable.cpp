@@ -93,6 +93,7 @@ Symbol *SymbolTable::insert(StringRef Name) {
   Sym->CanInline = true;
   Sym->Traced = Traced;
   Sym->ScriptDefined = false;
+  Sym->Partition = 1;
   return Sym;
 }
 
