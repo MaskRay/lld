@@ -859,6 +859,7 @@ static void readConfigs(opt::InputArgList &Args) {
   Config->SaveTemps = Args.hasArg(OPT_save_temps);
   Config->SearchPaths = args::getStrings(Args, OPT_library_path);
   Config->SectionStartMap = getSectionStartMap(Args);
+  Config->SecurePlt = Args.hasArg(OPT_secure_plt, OPT_bss_plt, false);
   Config->Shared = Args.hasArg(OPT_shared);
   Config->SingleRoRx = Args.hasArg(OPT_no_rosegment);
   Config->SoName = Args.getLastArgValue(OPT_soname);

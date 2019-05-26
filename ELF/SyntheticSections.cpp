@@ -1028,10 +1028,19 @@ void MipsGotSection::writeTo(uint8_t *Buf) {
 // section. I don't know why we have a BSS style type for the section but it is
 // consitent across both 64-bit PowerPC ABIs as well as the 32-bit PowerPC ABI.
 GotPltSection::GotPltSection()
-    : SyntheticSection(SHF_ALLOC | SHF_WRITE,
-                       Config->EMachine == EM_PPC64 ? SHT_NOBITS : SHT_PROGBITS,
-                       Config->Wordsize,
-                       Config->EMachine == EM_PPC64 ? ".plt" : ".got.plt") {}
+    : SyntheticSection(SHF_ALLOC | SHF_WRITE, SHT_PROGBITS, Config->Wordsize,
+                       ".got.plt") {
+  if (Config->EMachine == EM_PPC) {
+    if (!Config->SecurePlt) {
+      Flags |= SHF_EXECINSTR;
+      Type = SHT_NOBITS;
+    }
+    Name = ".plt";
+  } else if (Config->EMachine == EM_PPC64) {
+    Type = SHT_NOBITS;
+    Name = ".plt";
+  }
+}
 
 void GotPltSection::addEntry(Symbol &Sym) {
   assert(Sym.PltIndex == Entries.size());
@@ -1039,6 +1048,13 @@ void GotPltSection::addEntry(Symbol &Sym) {
 }
 
 size_t GotPltSection::getSize() const {
+  if (Config->EMachine == EM_PPC && !Config->SecurePlt) {
+    // In PPC32 BSS-PLT ABI, first 72 bytes are reserved for the dynamic loader.
+    // For the first 8192 entries, each needs 12 bytes. Other entries need 20
+    // bytes.
+    return 72 + 12 * Entries.size() +
+           (Entries.size() > 8192 ? 8 * (Entries.size() - 8192) : 0);
+  }
   return (Target->GotPltHeaderEntriesNum + Entries.size()) * Config->Wordsize;
 }
 
@@ -1260,7 +1276,15 @@ template <class ELFT> void DynamicSection<ELFT>::finalizeContents() {
 
   if (In.RelaDyn->isNeeded()) {
     addInSec(In.RelaDyn->DynamicTag, In.RelaDyn);
-    addSize(In.RelaDyn->SizeDynamicTag, In.RelaDyn->getParent());
+
+    // On PPC, .rela.dyn includes .rela.plt .
+    if (Config->EMachine == EM_PPC)
+      Entries.push_back({In.RelaDyn->SizeDynamicTag, [=] {
+                           return In.RelaDyn->getParent()->Size +
+                                  In.RelaPlt->getParent()->Size;
+                         }});
+    else
+      addSize(In.RelaDyn->SizeDynamicTag, In.RelaDyn->getParent());
 
     bool IsRela = Config->IsRela;
     addInt(IsRela ? DT_RELAENT : DT_RELENT,
@@ -1374,6 +1398,10 @@ template <class ELFT> void DynamicSection<ELFT>::finalizeContents() {
       addInSecRelative(DT_MIPS_RLD_MAP_REL, In.MipsRldMap);
     }
   }
+
+  // glibc uses DT_PPC_GOT (= DT_LOPROC) to recognize secure PLT.
+  if (Config->EMachine == EM_PPC && Config->SecurePlt)
+    add(DT_LOPROC, [] { return getPPC32GotBase(); });
 
   // Glink dynamic tag is required by the V2 abi if the plt section isn't empty.
   if (Config->EMachine == EM_PPC64 && In.Plt->isNeeded()) {
@@ -2250,8 +2278,11 @@ void HashTableSection::writeTo(uint8_t *Buf) {
 // On PowerPC64 the lazy symbol resolvers go into the `global linkage table`
 // in the .glink section, rather then the typical .plt section.
 PltSection::PltSection(bool IsIplt)
-    : SyntheticSection(SHF_ALLOC | SHF_EXECINSTR, SHT_PROGBITS, 16,
-                       Config->EMachine == EM_PPC64 ? ".glink" : ".plt"),
+    : SyntheticSection(
+          SHF_ALLOC | SHF_EXECINSTR, SHT_PROGBITS, 16,
+          (Config->EMachine == EM_PPC || Config->EMachine == EM_PPC64)
+              ? ".glink"
+              : ".plt"),
       HeaderSize(!IsIplt || Config->ZRetpolineplt ? Target->PltHeaderSize : 0),
       IsIplt(IsIplt) {
   // The PLT needs to be writable on SPARC as the dynamic linker will
@@ -2261,6 +2292,17 @@ PltSection::PltSection(bool IsIplt)
 }
 
 void PltSection::writeTo(uint8_t *Buf) {
+  if (Config->EMachine == EM_PPC) {
+    // On PPC32, write N `b PLTresolve` first.
+    size_t N = Entries.size();
+    for (size_t I = 0; I != N; ++I)
+      write32(Buf + 4 * I, 0x48000000 | 4 * (N - I));
+
+    // Then write PLTresolve.
+    Target->writePltHeader(Buf + 4 * N);
+    return;
+  }
+
   // At beginning of PLT or retpoline IPLT, we have code to call the dynamic
   // linker to resolve dynsyms at runtime. Write such code.
   if (HeaderSize)
@@ -3205,6 +3247,26 @@ bool ThunkSection::assignOffsets() {
   bool Changed = Off != Size;
   Size = Off;
   return Changed;
+}
+
+PPC32Got2Section::PPC32Got2Section()
+    : SyntheticSection(SHF_ALLOC | SHF_WRITE, SHT_PROGBITS, 4, ".got2") {}
+
+void PPC32Got2Section::finalizeContents() {
+  // In PIC code, PPC32 may have multiple GOT sections, one per file in .got2 .
+  // This function computes OutSecOff of each .got2 to be used in
+  // PPC32PltCallStub::writeTo(). The purpose of this empty synthetic section is
+  // to collect input sections named ".got2".
+  uint32_t Offset = 0;
+  for (BaseCommand *Base : getParent()->SectionCommands)
+    if (auto *ISD = dyn_cast<InputSectionDescription>(Base)) {
+      for (InputSection *IS : ISD->Sections) {
+        if (IS == this)
+          continue;
+        IS->File->PPC32Got2OutSecOff = Offset;
+        Offset += (uint32_t)IS->getSize();
+      }
+    }
 }
 
 // If linking position-dependent code then the table will store the addresses

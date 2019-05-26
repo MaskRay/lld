@@ -212,6 +212,10 @@ void elf::addReservedSymbols() {
     // https://sourceware.org/ml/binutils/2004-12/msg00094.html
     if (Symtab->find("__gnu_local_gp"))
       ElfSym::MipsLocalGp = addAbsolute("__gnu_local_gp");
+  } else if (Config->EMachine == EM_PPC) {
+    // glibc *crt1.o has a undefined reference to _SDA_BASE_. Since we don't
+    // support Small Data Area, define it as 0.
+    addOptionalRegular("_SDA_BASE_", nullptr, 0, STV_HIDDEN);
   }
 
   // The Power Architecture 64-bit v2 ABI defines a TableOfContents (TOC) which
@@ -233,9 +237,10 @@ void elf::addReservedSymbols() {
     }
 
     uint64_t GotOff = 0;
-    if (Config->EMachine == EM_PPC || Config->EMachine == EM_PPC64)
+    if (Config->EMachine == EM_PPC64)
       GotOff = 0x8000;
-
+    else if (Config->EMachine == EM_PPC && !Config->SecurePlt)
+      GotOff = 4;
     S->resolve(Defined{/*File=*/nullptr, GotSymName, STB_GLOBAL, STV_HIDDEN,
                        STT_NOTYPE, GotOff, /*Size=*/0, Out::ElfHeader});
     ElfSym::GlobalOffsetTable = cast<Defined>(S);
@@ -385,6 +390,11 @@ template <class ELFT> static void createSyntheticSections() {
   } else {
     In.Got = make<GotSection>();
     Add(In.Got);
+  }
+
+  if (Config->EMachine == EM_PPC) {
+    In.PPC32Got2 = make<PPC32Got2Section>();
+    Add(In.PPC32Got2);
   }
 
   if (Config->EMachine == EM_PPC64) {
@@ -1770,6 +1780,7 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
   finalizeSynthetic(In.RelaPlt);
   finalizeSynthetic(In.Plt);
   finalizeSynthetic(In.Iplt);
+  finalizeSynthetic(In.PPC32Got2);
   finalizeSynthetic(In.EhFrameHdr);
   finalizeSynthetic(In.VerSym);
   finalizeSynthetic(In.VerNeed);
@@ -2097,7 +2108,7 @@ template <class ELFT> void Writer<ELFT>::fixSectionAlignments() {
 static uint64_t computeFileOffset(OutputSection *OS, uint64_t Off) {
   // File offsets are not significant for .bss sections. By convention, we keep
   // section offsets monotonically increasing rather than setting to zero.
-  if (OS->Type == SHT_NOBITS)
+  if (OS->Type == SHT_NOBITS && !(OS->PtLoad && OS->PtLoad->FirstSec == OS))
     return Off;
 
   // If the section is not in a PT_LOAD, we just have to align it.

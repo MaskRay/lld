@@ -173,6 +173,7 @@ struct Configuration {
   bool Relocatable;
   bool RelrPackDynRelocs;
   bool SaveTemps;
+  bool SecurePlt;
   bool SingleRoRx;
   bool Shared;
   bool Static = false;

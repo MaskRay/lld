@@ -27,6 +27,8 @@ def Bdynamic: F<"Bdynamic">, HelpText<"Link against shared libraries (default)">
 
 def Bstatic: F<"Bstatic">, HelpText<"Do not link against shared libraries">;
 
+def bss_plt: F<"bss-plt">, HelpText<"Use old-style BSS PLT for PowerPC32">;
+
 def build_id: F<"build-id">, HelpText<"Alias for --build-id=fast">;
 
 def build_id_eq: J<"build-id=">, HelpText<"Generate build ID note">,
@@ -305,6 +307,8 @@ def relocatable: F<"relocatable">, HelpText<"Create relocatable object file">;
 defm retain_symbols_file:
   Eq<"retain-symbols-file", "Retain only the symbols listed in the file">,
   MetaVarName<"<file>">;
+
+def secure_plt: F<"secure-plt">, HelpText<"Use new-style PLT for PowerPC32 (default)">;
 
 defm script: Eq<"script", "Read linker script">;
 

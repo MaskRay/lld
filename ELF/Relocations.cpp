@@ -363,7 +363,7 @@ static bool isAbsoluteValue(const Symbol &Sym) {
 
 // Returns true if Expr refers a PLT entry.
 static bool needsPlt(RelExpr Expr) {
-  return oneof<R_PLT_PC, R_PPC64_CALL_PLT, R_PLT>(Expr);
+  return oneof<R_PLT_PC, R_PPC32_PLTREL, R_PPC64_CALL_PLT, R_PLT>(Expr);
 }
 
 // Returns true if Expr refers a GOT entry. Note that this function
@@ -399,8 +399,8 @@ static bool isStaticLinkTimeConstant(RelExpr E, RelType Type, const Symbol &Sym,
             R_MIPS_GOT_LOCAL_PAGE, R_MIPS_GOTREL, R_MIPS_GOT_OFF,
             R_MIPS_GOT_OFF32, R_MIPS_GOT_GP_PC, R_MIPS_TLSGD,
             R_AARCH64_GOT_PAGE_PC, R_GOT_PC, R_GOTONLY_PC, R_GOTPLTONLY_PC,
-            R_PLT_PC, R_TLSGD_GOT, R_TLSGD_GOTPLT, R_TLSGD_PC, R_PPC64_CALL_PLT,
-            R_PPC64_RELAX_TOC, R_TLSDESC_CALL, R_TLSDESC_PC,
+            R_PLT_PC, R_TLSGD_GOT, R_TLSGD_GOTPLT, R_TLSGD_PC, R_PPC32_PLTREL,
+            R_PPC64_CALL_PLT, R_PPC64_RELAX_TOC, R_TLSDESC_CALL, R_TLSDESC_PC,
             R_AARCH64_TLSDESC_PAGE, R_HINT, R_TLSLD_HINT, R_TLSIE_HINT>(E))
     return true;
 
@@ -469,6 +469,7 @@ static RelExpr fromPlt(RelExpr Expr) {
   // reference to the symbol itself.
   switch (Expr) {
   case R_PLT_PC:
+  case R_PPC32_PLTREL:
     return R_PC;
   case R_PPC64_CALL_PLT:
     return R_PPC64_CALL;
@@ -838,8 +839,17 @@ static void addPltEntry(PltSection *Plt, GotPltSection *GotPlt,
                         RelocationBaseSection *Rel, RelType Type, Symbol &Sym) {
   Plt->addEntry<ELFT>(Sym);
   GotPlt->addEntry(Sym);
-  Rel->addReloc(
-      {Type, GotPlt, Sym.getGotPltOffset(), !Sym.IsPreemptible, &Sym, 0});
+  uint64_t Offset;
+  if (Config->EMachine == EM_PPC && !Config->SecurePlt) {
+    // PPC32 BSS-PLT ABI encodes PLT differently. See the comment in
+    // GotPltSection::getSize().
+    Offset = 72 + 8 * Sym.PltIndex;
+    if (Sym.PltIndex > 8192)
+      Offset += 4 * (Sym.PltIndex - 8192);
+  } else {
+    Offset = Sym.getGotPltOffset();
+  }
+  Rel->addReloc({Type, GotPlt, Offset, !Sym.IsPreemptible, &Sym, 0});
 }
 
 static void addGotEntry(Symbol &Sym) {
@@ -1105,6 +1115,9 @@ static void scanReloc(InputSectionBase &Sec, OffsetGetter &GetOffset, RelTy *&I,
          getLocation(Sec, Sym, Offset));
   }
 
+  // Read an addend.
+  int64_t Addend = computeAddend<ELFT>(Rel, End, Sec, Expr, Sym.isLocal());
+
   // Relax relocations.
   //
   // If we know that a PLT entry will be resolved within the same ELF module, we
@@ -1114,10 +1127,13 @@ static void scanReloc(InputSectionBase &Sec, OffsetGetter &GetOffset, RelTy *&I,
   // runtime, because the main exectuable is always at the beginning of a search
   // list. We can leverage that fact.
   if (!Sym.IsPreemptible && (!Sym.isGnuIFunc() || Config->ZIfuncNoplt)) {
-    if (Expr == R_GOT_PC && !isAbsoluteValue(Sym))
+    if (Expr == R_GOT_PC && !isAbsoluteValue(Sym)) {
       Expr = Target->adjustRelaxExpr(Type, RelocatedAddr, Expr);
-    else
+    } else {
+      if (Config->EMachine == EM_PPC && Expr == R_PPC32_PLTREL)
+        Addend = 0;
       Expr = fromPlt(Expr);
+    }
   }
 
   // If the relocation does not emit a GOT or GOTPLT entry but its computation
@@ -1130,9 +1146,6 @@ static void scanReloc(InputSectionBase &Sec, OffsetGetter &GetOffset, RelTy *&I,
                  Expr)) {
     In.Got->HasGotOffRel = true;
   }
-
-  // Read an addend.
-  int64_t Addend = computeAddend<ELFT>(Rel, End, Sec, Expr, Sym.isLocal());
 
   // Process some TLS relocations, including relaxing TLS relocations.
   // Note that this function does not handle all TLS relocations.
@@ -1618,27 +1631,27 @@ static bool isThunkSectionCompatible(InputSection *Source,
   return true;
 }
 
-std::pair<Thunk *, bool> ThunkCreator::getThunk(InputSection *IS, Symbol &Sym,
-                                                RelType Type, uint64_t Src) {
+std::pair<Thunk *, bool> ThunkCreator::getThunk(InputSection *IS,
+                                                Relocation &Rel, uint64_t Src) {
   std::vector<Thunk *> *ThunkVec = nullptr;
 
   // We use (section, offset) pair to find the thunk position if possible so
   // that we create only one thunk for aliased symbols or ICFed sections.
-  if (auto *D = dyn_cast<Defined>(&Sym))
+  if (auto *D = dyn_cast<Defined>(Rel.Sym))
     if (!D->isInPlt() && D->Section)
       ThunkVec = &ThunkedSymbolsBySection[{D->Section->Repl, D->Value}];
   if (!ThunkVec)
-    ThunkVec = &ThunkedSymbols[&Sym];
+    ThunkVec = &ThunkedSymbols[Rel.Sym];
 
   // Check existing Thunks for Sym to see if they can be reused
   for (Thunk *T : *ThunkVec)
     if (isThunkSectionCompatible(IS, T->getThunkTargetSym()->Section) &&
-        T->isCompatibleWith(Type) &&
-        Target->inBranchRange(Type, Src, T->getThunkTargetSym()->getVA()))
+        T->isCompatibleWith(*IS, Rel.Type) &&
+        Target->inBranchRange(Rel.Type, Src, T->getThunkTargetSym()->getVA()))
       return std::make_pair(T, false);
 
   // No existing compatible Thunk in range, create a new one
-  Thunk *T = addThunk(Type, Sym);
+  Thunk *T = addThunk(*IS, Rel);
   ThunkVec->push_back(T);
   return std::make_pair(T, true);
 }
@@ -1717,7 +1730,7 @@ bool ThunkCreator::createThunks(ArrayRef<OutputSection *> OutputSections) {
 
             Thunk *T;
             bool IsNew;
-            std::tie(T, IsNew) = getThunk(IS, *Rel.Sym, Rel.Type, Src);
+            std::tie(T, IsNew) = getThunk(IS, Rel, Src);
 
             if (IsNew) {
               // Find or create a ThunkSection for the new Thunk

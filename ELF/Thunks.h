@@ -48,7 +48,9 @@ public:
 
   // To reuse a Thunk the caller as identified by the Type must be
   // compatible with it.
-  virtual bool isCompatibleWith(RelType Type) const { return true; }
+  virtual bool isCompatibleWith(const InputSection &IS, RelType Type) const {
+    return true;
+  }
 
   Defined *getThunkTargetSym() const { return Syms[0]; }
 
@@ -61,8 +63,8 @@ public:
 };
 
 // For a Relocation to symbol S create a Thunk to be added to a synthetic
-// ThunkSection. At present there are implementations for ARM and Mips Thunks.
-Thunk *addThunk(RelType Type, Symbol &S);
+// ThunkSection.
+Thunk *addThunk(const InputSection &IS, Relocation &Rel);
 
 } // namespace elf
 } // namespace lld
