@@ -576,12 +576,6 @@ addInputSec(StringMap<TinyPtrVector<OutputSection *>> &Map,
     return Out->RelocationSection;
   }
 
-  // When control reaches here, mergeable sections have already been merged into
-  // synthetic sections. For relocatable case we want to create one output
-  // section per syntetic section so that they have a valid sh_entsize.
-  if (Config->Relocatable && (IS->Flags & SHF_MERGE))
-    return createSection(IS, OutsecName);
-
   //  The ELF spec just says
   // ----------------------------------------------------------------
   // In the first phase, input sections that match in name, type and

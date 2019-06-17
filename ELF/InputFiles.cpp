@@ -487,15 +487,15 @@ template <class ELFT> bool ObjFile<ELFT>::shouldMerge(const Elf_Shdr &Sec) {
   // sometimes makes the linker significantly faster, although the output will
   // be bigger.
   //
-  // Doing the same for -r would create a problem as it would combine sections
-  // with different sh_entsize. One option would be to just copy every SHF_MERGE
-  // section as is to the output. While this would produce a valid ELF file with
-  // usable SHF_MERGE sections, tools like (llvm-)?dwarfdump get confused when
-  // they see two .debug_str. We could have separate logic for combining
-  // SHF_MERGE sections based both on their name and sh_entsize, but that seems
-  // to be more trouble than it is worth. Instead, we just use the regular (-O1)
-  // logic for -r.
-  if (Config->Optimize == 0 && !Config->Relocatable)
+  // For -r, one option would be to just copy every SHF_MERGE section as is to
+  // the output. While this would produce a valid ELF file with usable SHF_MERGE
+  // sections, tools like (llvm-)?dwarfdump get confused when they see two
+  // .debug_str. Instead, just concatenate sections with the same name, sh_flags
+  // and sh_entsize, but don't merge duplicate elements. If sections with the
+  // same name but different sh_entsize are concatenated, the result will get 0
+  // sh_entsize and will not be merged. This is acceptable because section
+  // merging is optional.
+  if (Config->Optimize == 0 || Config->Relocatable)
     return false;
 
   // A mergeable section with size 0 is useless because they don't have
@@ -881,9 +881,11 @@ InputSectionBase *ObjFile<ELFT>::createInputSection(const Elf_Shdr &Sec) {
             Name);
       return &InputSection::Discarded;
     }
+    StringSet<> Libs;
     for (const char *D = Data.begin(), *E = Data.end(); D < E;) {
       StringRef S(D);
-      addDependentLibrary(S, this);
+      if (Libs.insert(S).second)
+        addDependentLibrary(S, this);
       D += S.size() + 1;
     }
     return &InputSection::Discarded;

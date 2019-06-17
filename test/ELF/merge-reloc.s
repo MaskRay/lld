@@ -2,6 +2,8 @@
 # RUN: llvm-mc -filetype=obj -triple=x86_64-pc-linux %s -o %t.o
 # RUN: ld.lld %t.o -r -o %t-rel
 # RUN: llvm-readobj -S --section-data %t-rel | FileCheck %s
+# RUN: ld.lld -O0 %t.o -r -o %t-rel
+# RUN: llvm-readobj -S --section-data %t-rel | FileCheck %s
 
 # When linker generates a relocatable object it does string merging in the same
 # way as for regular link. It should keep SHF_MERGE flag and set proper sh_entsize
@@ -17,13 +19,13 @@
 # CHECK-NEXT:   ]
 # CHECK-NEXT:   Address:
 # CHECK-NEXT:   Offset:
-# CHECK-NEXT:   Size: 4
+# CHECK-NEXT:   Size: 12
 # CHECK-NEXT:   Link: 0
 # CHECK-NEXT:   Info: 0
 # CHECK-NEXT:   AddressAlignment: 4
 # CHECK-NEXT:   EntrySize: 4
 # CHECK-NEXT:   SectionData (
-# CHECK-NEXT:     0000: 42000000
+# CHECK-NEXT:     0000: 42000000 42000000 42000000
 # CHECK-NEXT:   )
 # CHECK-NEXT: }
 # CHECK:      Section {
@@ -36,13 +38,13 @@
 # CHECK-NEXT:   ]
 # CHECK-NEXT:   Address:
 # CHECK-NEXT:   Offset:
-# CHECK-NEXT:   Size: 8
+# CHECK-NEXT:   Size: 16
 # CHECK-NEXT:   Link: 0
 # CHECK-NEXT:   Info: 0
 # CHECK-NEXT:   AddressAlignment: 8
 # CHECK-NEXT:   EntrySize: 8
 # CHECK-NEXT:   SectionData (
-# CHECK-NEXT:     0000: 42000000 42000000
+# CHECK-NEXT:     0000: 42000000 42000000 42000000 42000000
 # CHECK-NEXT:   )
 # CHECK-NEXT: }
 # CHECK:      Section {
