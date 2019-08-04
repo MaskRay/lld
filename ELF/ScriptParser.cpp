@@ -1344,16 +1344,8 @@ void ScriptParser::readAnonymousDeclaration() {
   std::vector<SymbolVersion> locals;
   std::vector<SymbolVersion> globals;
   std::tie(locals, globals) = readSymbols();
-
-  for (SymbolVersion v : locals) {
-    if (v.name == "*")
-      config->defaultSymbolVersion = VER_NDX_LOCAL;
-    else
-      config->versionDefinitions[0].names.push_back(v);
-  }
-
-  for (SymbolVersion v : globals)
-    config->versionDefinitions[1].names.push_back(v);
+  llvm::copy(locals, std::back_inserter(config->versionDefinitions[0].names));
+  llvm::copy(globals, std::back_inserter(config->versionDefinitions[1].names));
 
   expect(";");
 }
@@ -1365,13 +1357,7 @@ void ScriptParser::readVersionDeclaration(StringRef verStr) {
   std::vector<SymbolVersion> locals;
   std::vector<SymbolVersion> globals;
   std::tie(locals, globals) = readSymbols();
-
-  for (SymbolVersion v : locals) {
-    if (v.name == "*")
-      config->defaultSymbolVersion = VER_NDX_LOCAL;
-    else
-      config->versionDefinitions[0].names.push_back(v);
-  }
+  llvm::copy(locals, std::back_inserter(config->versionDefinitions[0].names));
 
   // Create a new version definition and add that to the global symbols.
   VersionDefinition ver;

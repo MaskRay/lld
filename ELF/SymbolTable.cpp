@@ -73,7 +73,7 @@ Symbol *SymbolTable::insert(StringRef name) {
 
   sym->setName(name);
   sym->symbolKind = Symbol::PlaceholderKind;
-  sym->versionId = config->defaultSymbolVersion;
+  sym->versionId = VER_NDX_GLOBAL;
   sym->visibility = STV_DEFAULT;
   sym->isUsedInRegularObj = false;
   sym->exportDynamic = false;
@@ -203,8 +203,10 @@ void SymbolTable::assignExactVersion(SymbolVersion ver, uint16_t versionId,
     if (sym->getName().contains('@'))
       continue;
 
-    if (sym->versionId == config->defaultSymbolVersion)
+    if (sym->verdefIndex == UINT32_C(-1)) {
+      sym->verdefIndex = 0;
       sym->versionId = versionId;
+    }
     if (sym->versionId == versionId)
       continue;
 
@@ -218,8 +220,10 @@ void SymbolTable::assignWildcardVersion(SymbolVersion ver, uint16_t versionId) {
   // so we set a version to a symbol only if no version has been assigned
   // to the symbol. This behavior is compatible with GNU.
   for (Symbol *b : findAllByVersion(ver))
-    if (b->versionId == config->defaultSymbolVersion)
+    if (b->verdefIndex == UINT32_C(-1)) {
+      b->verdefIndex = 0;
       b->versionId = versionId;
+    }
 }
 
 // This function processes version scripts by updating the versionId
@@ -256,7 +260,6 @@ void SymbolTable::scanVersionScript() {
 
   // isPreemptible is false at this point. To correctly compute the binding of a
   // Defined (which is used by includeInDynsym()), we need to know if it is
-  // VER_NDX_LOCAL or not. If defaultSymbolVersion is VER_NDX_LOCAL, we should
-  // compute symbol versions before handling --dynamic-list.
+  // VER_NDX_LOCAL or not. Compute symbol versions before handling --dynamic-list.
   handleDynamicList();
 }

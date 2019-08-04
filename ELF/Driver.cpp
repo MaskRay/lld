@@ -1018,7 +1018,8 @@ static void readConfigs(opt::InputArgList &args) {
   // If --retain-symbol-file is used, we'll keep only the symbols listed in
   // the file and discard all others.
   if (auto *arg = args.getLastArg(OPT_retain_symbols_file)) {
-    config->defaultSymbolVersion = VER_NDX_LOCAL;
+    config->versionDefinitions[0].names.push_back(
+        {"*", /*isExternCpp=*/false, /*hasWildcard=*/true});
     if (Optional<MemoryBufferRef> buffer = readFile(arg->getValue()))
       for (StringRef s : args::getLines(*buffer))
         config->versionDefinitions[1].names.push_back(
