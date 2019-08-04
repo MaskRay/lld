@@ -192,7 +192,7 @@ void SymbolTable::assignExactVersion(SymbolVersion ver, uint16_t versionId,
       return "VER_NDX_LOCAL";
     if (ver == VER_NDX_GLOBAL)
       return "VER_NDX_GLOBAL";
-    return ("version '" + config->versionDefinitions[ver - 2].name + "'").str();
+    return ("version '" + config->versionDefinitions[ver].name + "'").str();
   };
 
   // Assign the version.
@@ -214,9 +214,6 @@ void SymbolTable::assignExactVersion(SymbolVersion ver, uint16_t versionId,
 }
 
 void SymbolTable::assignWildcardVersion(SymbolVersion ver, uint16_t versionId) {
-  if (!ver.hasWildcard)
-    return;
-
   // Exact matching takes precendence over fuzzy matching,
   // so we set a version to a symbol only if no version has been assigned
   // to the symbol. This behavior is compatible with GNU.
@@ -233,26 +230,23 @@ void SymbolTable::assignWildcardVersion(SymbolVersion ver, uint16_t versionId) {
 void SymbolTable::scanVersionScript() {
   // First, we assign versions to exact matching symbols,
   // i.e. version definitions not containing any glob meta-characters.
-  for (SymbolVersion &ver : config->versionScriptGlobals)
-    assignExactVersion(ver, VER_NDX_GLOBAL, "global");
-  for (SymbolVersion &ver : config->versionScriptLocals)
-    assignExactVersion(ver, VER_NDX_LOCAL, "local");
   for (VersionDefinition &v : config->versionDefinitions)
-    for (SymbolVersion &ver : v.globals)
+    for (SymbolVersion &ver : v.names)
       assignExactVersion(ver, v.id, v.name);
 
-  // Next, we assign versions to fuzzy matching symbols,
-  // i.e. version definitions containing glob meta-characters.
-  for (SymbolVersion &ver : config->versionScriptGlobals)
-    assignWildcardVersion(ver, VER_NDX_GLOBAL);
-  for (SymbolVersion &ver : config->versionScriptLocals)
-    assignWildcardVersion(ver, VER_NDX_LOCAL);
-
+  // Next, assign versions to wildcards that are not "*".
   // Note that because the last match takes precedence over previous matches,
   // we iterate over the definitions in the reverse order.
   for (VersionDefinition &v : llvm::reverse(config->versionDefinitions))
-    for (SymbolVersion &ver : v.globals)
-      assignWildcardVersion(ver, v.id);
+    for (SymbolVersion &ver : v.names)
+      if (ver.hasWildcard && ver.name != "*")
+        assignWildcardVersion(ver, v.id);
+
+  // Then, assign versions to "*". In GNU linkers they have lower priority than other wildcard names.
+  for (VersionDefinition &v : config->versionDefinitions)
+    for (SymbolVersion &ver : v.names)
+      if (ver.hasWildcard && ver.name == "*")
+        assignWildcardVersion(ver, v.id);
 
   // Symbol themselves might know their versions because symbols
   // can contain versions in the form of <name>@<version>.

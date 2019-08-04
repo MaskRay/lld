@@ -1349,11 +1349,11 @@ void ScriptParser::readAnonymousDeclaration() {
     if (v.name == "*")
       config->defaultSymbolVersion = VER_NDX_LOCAL;
     else
-      config->versionScriptLocals.push_back(v);
+      config->versionDefinitions[0].names.push_back(v);
   }
 
   for (SymbolVersion v : globals)
-    config->versionScriptGlobals.push_back(v);
+    config->versionDefinitions[1].names.push_back(v);
 
   expect(";");
 }
@@ -1370,17 +1370,17 @@ void ScriptParser::readVersionDeclaration(StringRef verStr) {
     if (v.name == "*")
       config->defaultSymbolVersion = VER_NDX_LOCAL;
     else
-      config->versionScriptLocals.push_back(v);
+      config->versionDefinitions[0].names.push_back(v);
   }
 
   // Create a new version definition and add that to the global symbols.
   VersionDefinition ver;
   ver.name = verStr;
-  ver.globals = globals;
+  ver.names = globals;
 
   // User-defined version number starts from 2 because 0 and 1 are
   // reserved for VER_NDX_LOCAL and VER_NDX_GLOBAL, respectively.
-  ver.id = config->versionDefinitions.size() + 2;
+  ver.id = config->versionDefinitions.size();
   config->versionDefinitions.push_back(ver);
 
   // Each version may have a parent version. For example, "Ver2"

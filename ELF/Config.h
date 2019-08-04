@@ -71,8 +71,8 @@ struct SymbolVersion {
 // can be found in version script if it is used for link.
 struct VersionDefinition {
   llvm::StringRef name;
-  uint16_t id = 0;
-  std::vector<SymbolVersion> globals;
+  uint16_t id;
+  std::vector<SymbolVersion> names;
 };
 
 // This struct contains the global configuration for the linker.
@@ -117,8 +117,6 @@ struct Configuration {
   std::vector<llvm::StringRef> symbolOrderingFile;
   std::vector<llvm::StringRef> undefined;
   std::vector<SymbolVersion> dynamicList;
-  std::vector<SymbolVersion> versionScriptGlobals;
-  std::vector<SymbolVersion> versionScriptLocals;
   std::vector<uint8_t> buildIdVector;
   llvm::MapVector<std::pair<const InputSectionBase *, const InputSectionBase *>,
                   uint64_t>

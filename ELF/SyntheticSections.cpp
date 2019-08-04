@@ -1162,10 +1162,10 @@ void StringTableSection::writeTo(uint8_t *buf) {
   }
 }
 
-// Returns the number of version definition entries. Because the first entry
-// is for the version definition itself, it is the number of versioned symbols
-// plus one. Note that we don't support multiple versions yet.
-static unsigned getVerDefNum() { return config->versionDefinitions.size() + 1; }
+// Returns the number of entries in .gnu.version_d: the number of
+// non-VER_NDX_LOCAL-non-VER_NDX_GLOBAL definitions, plus 1. Note that we don't
+// support vd_cnt > 1 yet.
+static unsigned getVerDefNum() { return config->versionDefinitions.size() - 1; }
 
 template <class ELFT>
 DynamicSection<ELFT>::DynamicSection()
@@ -2771,7 +2771,8 @@ StringRef VersionDefinitionSection::getFileDefName() {
 
 void VersionDefinitionSection::finalizeContents() {
   fileDefNameOff = getPartition().dynStrTab->addString(getFileDefName());
-  for (VersionDefinition &v : config->versionDefinitions)
+  for (const VersionDefinition &v :
+       makeArrayRef(config->versionDefinitions).slice(2))
     verDefNameOffs.push_back(getPartition().dynStrTab->addString(v.name));
 
   if (OutputSection *sec = getPartition().dynStrTab->getParent())
@@ -2805,7 +2806,8 @@ void VersionDefinitionSection::writeTo(uint8_t *buf) {
   writeOne(buf, 1, getFileDefName(), fileDefNameOff);
 
   auto nameOffIt = verDefNameOffs.begin();
-  for (VersionDefinition &v : config->versionDefinitions) {
+  for (const VersionDefinition &v :
+       makeArrayRef(config->versionDefinitions).slice(2)) {
     buf += EntrySize;
     writeOne(buf, v.id, v.name, *nameOffIt++);
   }
