@@ -963,36 +963,43 @@ static void processRelocAux(InputSectionBase &sec, RelExpr expr, RelType type,
     return;
   }
 
+  bool dyn = false;
   bool canWrite = (sec.flags & SHF_WRITE) || !config->zText;
-  if (canWrite) {
+  {
     RelType rel = target->getDynRel(type);
     if (expr == R_GOT || (rel == target->symbolicRel && !sym.isPreemptible)) {
-      addRelativeReloc(&sec, offset, &sym, addend, expr, type);
-      return;
+      dyn = true;
+      if (canWrite) {
+        addRelativeReloc(&sec, offset, &sym, addend, expr, type);
+        return;
+      }
     } else if (rel != 0) {
       if (config->emachine == EM_MIPS && rel == target->symbolicRel)
         rel = target->relativeRel;
-      sec.getPartition().relaDyn->addReloc(rel, &sec, offset, &sym, addend,
-                                           R_ADDEND, type);
+      dyn = true;
+      if (canWrite) {
+        sec.getPartition().relaDyn->addReloc(rel, &sec, offset, &sym, addend,
+                                             R_ADDEND, type);
 
-      // MIPS ABI turns using of GOT and dynamic relocations inside out.
-      // While regular ABI uses dynamic relocations to fill up GOT entries
-      // MIPS ABI requires dynamic linker to fills up GOT entries using
-      // specially sorted dynamic symbol table. This affects even dynamic
-      // relocations against symbols which do not require GOT entries
-      // creation explicitly, i.e. do not have any GOT-relocations. So if
-      // a preemptible symbol has a dynamic relocation we anyway have
-      // to create a GOT entry for it.
-      // If a non-preemptible symbol has a dynamic relocation against it,
-      // dynamic linker takes it st_value, adds offset and writes down
-      // result of the dynamic relocation. In case of preemptible symbol
-      // dynamic linker performs symbol resolution, writes the symbol value
-      // to the GOT entry and reads the GOT entry when it needs to perform
-      // a dynamic relocation.
-      // ftp://www.linux-mips.org/pub/linux/mips/doc/ABI/mipsabi.pdf p.4-19
-      if (config->emachine == EM_MIPS)
-        in.mipsGot->addEntry(*sec.file, sym, addend, expr);
-      return;
+        // MIPS ABI turns using of GOT and dynamic relocations inside out.
+        // While regular ABI uses dynamic relocations to fill up GOT entries
+        // MIPS ABI requires dynamic linker to fills up GOT entries using
+        // specially sorted dynamic symbol table. This affects even dynamic
+        // relocations against symbols which do not require GOT entries
+        // creation explicitly, i.e. do not have any GOT-relocations. So if
+        // a preemptible symbol has a dynamic relocation we anyway have
+        // to create a GOT entry for it.
+        // If a non-preemptible symbol has a dynamic relocation against it,
+        // dynamic linker takes it st_value, adds offset and writes down
+        // result of the dynamic relocation. In case of preemptible symbol
+        // dynamic linker performs symbol resolution, writes the symbol value
+        // to the GOT entry and reads the GOT entry when it needs to perform
+        // a dynamic relocation.
+        // ftp://www.linux-mips.org/pub/linux/mips/doc/ABI/mipsabi.pdf p.4-19
+        if (config->emachine == EM_MIPS)
+          in.mipsGot->addEntry(*sec.file, sym, addend, expr);
+        return;
+      }
     }
   }
 
@@ -1061,7 +1068,7 @@ static void processRelocAux(InputSectionBase &sec, RelExpr expr, RelType type,
     return;
   }
 
-  if (!canWrite && !isRelExpr(expr)) {
+  if (dyn && !sym.isUndefined()) {
     errorOrWarn(
         "can't create dynamic relocation " + toString(type) + " against " +
         (sym.getName().empty() ? "local symbol" : "symbol: " + toString(sym)) +
