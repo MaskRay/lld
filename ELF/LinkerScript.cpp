@@ -1049,16 +1049,40 @@ static uint64_t getInitialDot() {
   return std::min(startAddr, target->getImageBase() + elf::getHeaderSize());
 }
 
+static DenseMap<const Defined *, std::pair<SectionBase *, uint64_t>>
+getSymbolAssignmentValues(std::vector<BaseCommand *> sectionCommands) {
+  DenseMap<const Defined *, std::pair<SectionBase *, uint64_t>> ret;
+  for (BaseCommand *base : sectionCommands) {
+    if (auto *cmd = dyn_cast<SymbolAssignment>(base)) {
+      if (cmd->sym)
+        ret.try_emplace(cmd->sym,
+                        std::make_pair(cmd->sym->section, cmd->sym->value));
+      continue;
+    }
+    for (BaseCommand *base1 : cast<OutputSection>(base)->sectionCommands)
+      if (auto *cmd = dyn_cast<SymbolAssignment>(base1))
+        if (cmd->sym)
+          ret.try_emplace(cmd->sym,
+                          std::make_pair(cmd->sym->section, cmd->sym->value));
+  }
+  return ret;
+}
+
 // Here we assign addresses as instructed by linker script SECTIONS
 // sub-commands. Doing that allows us to use final VA values, so here
 // we also handle rest commands like symbol assignments and ASSERTs.
-void LinkerScript::assignAddresses() {
+// Returns a symbol that has changed its section or value, or nullptr if no
+// symbol has changed.
+const Defined *LinkerScript::assignAddresses() {
   dot = getInitialDot();
 
   auto deleter = std::make_unique<AddressState>();
   ctx = deleter.get();
   errorOnMissingSection = true;
   switchTo(aether);
+
+  DenseMap<const Defined *, std::pair<SectionBase *, uint64_t>> oldValues =
+      getSymbolAssignmentValues(sectionCommands);
 
   for (BaseCommand *base : sectionCommands) {
     if (auto *cmd = dyn_cast<SymbolAssignment>(base)) {
@@ -1070,6 +1094,17 @@ void LinkerScript::assignAddresses() {
     assignOffsets(cast<OutputSection>(base));
   }
   ctx = nullptr;
+
+  // Return the lexicographical smallest (for determinism) Defined whose
+  // section/value has changed.
+  const Defined *changed = nullptr;
+  for (auto &it : oldValues) {
+    const Defined *sym = it.first;
+    if ((std::make_pair(sym->section, sym->value) != it.second) &&
+        (!changed || sym->getName() < changed->getName()))
+      changed = sym;
+  }
+  return changed;
 }
 
 // Creates program headers as instructed by PHDRS linker script command.
