@@ -1038,6 +1038,9 @@ static void readConfigs(opt::InputArgList &args) {
     for (auto *arg : args.filtered(OPT_export_dynamic_symbol))
       config->dynamicList.push_back(
           {arg->getValue(), /*isExternCpp=*/false, /*hasWildcard=*/false});
+  } else {
+    config->dynamicList.push_back(
+        {"*", /*isExternCpp=*/false, /*hasWildcard=*/true});
   }
 
   // If --export-dynamic-symbol=foo is given and symbol foo is defined in
