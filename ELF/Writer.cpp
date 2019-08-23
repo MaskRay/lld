@@ -2011,8 +2011,8 @@ static bool needsPtLoad(OutputSection *sec) {
   // Don't allocate VA space for TLS NOBITS sections. The PT_TLS PHDR is
   // responsible for allocating space for them, not the PT_LOAD that
   // contains the TLS initialization image.
-  if ((sec->flags & SHF_TLS) && sec->type == SHT_NOBITS)
-    return false;
+  //if ((sec->flags & SHF_TLS) && sec->type == SHT_NOBITS)
+  //  return false;
   return true;
 }
 
@@ -2269,11 +2269,6 @@ template <class ELFT> void Writer<ELFT>::fixSectionAlignments() {
 // same with its virtual address modulo the page size, so that the loader can
 // load executables without any address adjustment.
 static uint64_t computeFileOffset(OutputSection *os, uint64_t off) {
-  // File offsets are not significant for .bss sections. By convention, we keep
-  // section offsets monotonically increasing rather than setting to zero.
-  if (os->type == SHT_NOBITS)
-    return off;
-
   // If the section is not in a PT_LOAD, we just have to align it.
   if (!os->ptLoad)
     return alignTo(off, os->alignment);
@@ -2285,6 +2280,11 @@ static uint64_t computeFileOffset(OutputSection *os, uint64_t off) {
     uint64_t alignment = std::max<uint64_t>(os->alignment, config->maxPageSize);
     return alignTo(off, alignment, os->addr);
   }
+
+  // File offsets are not significant for .bss sections. By convention, we keep
+  // section offsets monotonically increasing rather than setting to zero.
+  if (os->type == SHT_NOBITS)
+    return off;
 
   // If two sections share the same PT_LOAD the file offset is calculated
   // using this formula: Off2 = Off1 + (VA2 - VA1).
@@ -2370,7 +2370,9 @@ template <class ELFT> void Writer<ELFT>::setPhdrs(Partition &part) {
       if (last->type != SHT_NOBITS)
         p->p_filesz += last->size;
 
-      p->p_memsz = last->addr + last->size - first->addr;
+      p->p_memsz = last->addr - first->addr;
+      if (last->type != SHT_NOBITS || !(last->flags & SHF_TLS))
+        p->p_memsz += last->size;
       p->p_offset = first->offset;
       p->p_vaddr = first->addr;
 
