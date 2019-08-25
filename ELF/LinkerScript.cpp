@@ -378,7 +378,7 @@ LinkerScript::computeInputSections(const InputSectionDescription *cmd) {
     size_t sizeBefore = ret.size();
 
     for (InputSectionBase *sec : inputSections) {
-      if (!sec->isLive() || sec->assigned)
+      if (sec->assigned || (!sec->isLive() && sec->repl == sec))
         continue;
 
       // For -emit-relocs we have to ignore entries like
@@ -421,8 +421,11 @@ void LinkerScript::discard(ArrayRef<InputSection *> v) {
     if (s == mainPart->hashTab)
       mainPart->hashTab = nullptr;
 
-    s->assigned = false;
+    // Entirely discarded. s->repl != s indicates a section that can be unfolded
+    // later.
     s->markDead();
+    s->repl = s;
+
     discard(s->dependentSections);
   }
 }
@@ -510,8 +513,7 @@ void LinkerScript::processSectionCommands() {
           s->alignment = subalign;
       }
 
-      // Add input sections to an output section.
-      for (InputSection *s : v)
+      for (InputSection *&s : v)
         sec->addSection(s);
 
       sec->sectionIndex = i++;
@@ -521,6 +523,28 @@ void LinkerScript::processSectionCommands() {
         sec->flags &= ~(uint64_t)SHF_ALLOC;
     }
   }
+
+  for (BaseCommand *base : script->sectionCommands)
+    if (auto *sec = dyn_cast<OutputSection>(base))
+      for (BaseCommand *sub_base : sec->sectionCommands)
+        if (auto *isd = dyn_cast<InputSectionDescription>(sub_base)) {
+          // Do not ICF fold input sections between output sections. If the
+          // output sections of sec and the InputSection it gets folded into are
+          // different, unfold it. sec->repl may have increased alignment or be
+          // have moved to the main partition, but that does not matter.
+          for (InputSection *s : isd->sections)
+            if (s->repl != s &&
+                cast<InputSection>(s->repl)->getParent() != s->getParent()) {
+              s->repl = s;
+              s->markLive();
+              for (InputSection *dependent : s->dependentSections)
+                dependent->markLive();
+            }
+
+          llvm::erase_if(isd->sections,
+                         [](InputSection *isec) { return !isec->isLive(); });
+        }
+
   ctx = nullptr;
 }
 

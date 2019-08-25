@@ -303,10 +303,10 @@ bool ICF<ELFT>::equalsConstant(const InputSection *a, const InputSection *b) {
       a->getSize() != b->getSize() || a->data() != b->data())
     return false;
 
-  // If two sections have different output sections, we cannot merge them.
-  // FIXME: This doesn't do the right thing in the case where there is a linker
-  // script. We probably need to move output section assignment before ICF to
-  // get the correct behaviour here.
+  // If two sections have different output sections, we cannot merge them. When
+  // there is a linker script, getOutputSectionName may be inaccurate, sections
+  // going into different output sections may get folded but they will be
+  // unfolded in LinkerScript::processSectionCommands.
   if (getOutputSectionName(a) != getOutputSectionName(b))
     return false;
 
