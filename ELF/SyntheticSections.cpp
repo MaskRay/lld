@@ -466,10 +466,17 @@ void EhFrameSection::finalizeContents() {
     rec->cie->outputOff = off;
     off += alignTo(rec->cie->size, config->wordsize);
 
-    for (EhSectionPiece *fde : rec->fdes) {
-      fde->outputOff = off;
-      off += alignTo(fde->size, config->wordsize);
-    }
+    for (EhSectionPiece *&fde : rec->fdes)
+      if (fde->sec->areRelocsRela) {
+        if (isFdeLive<ELF64LE>(*fde, fde->sec->template relas<ELF64LE>())) {
+          fde->outputOff = off;
+          off += alignTo(fde->size, config->wordsize);
+        } else {
+          --numFdes;
+          fde = nullptr;
+        }
+      }
+    llvm::erase_if(rec->fdes, [](EhSectionPiece *fde) { return !fde; });
   }
 
   // The LSB standard does not allow a .eh_frame section with zero

@@ -1898,6 +1898,7 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
   markLive<ELFT>();
   demoteSharedSymbols();
   mergeSections();
+  preWriteResult<ELFT>();
   if (config->icf != ICFLevel::None) {
     findKeepUniqueSections<ELFT>(args);
     doIcf<ELFT>();

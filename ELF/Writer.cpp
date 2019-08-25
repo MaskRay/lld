@@ -540,24 +540,6 @@ template <class ELFT> static void createSyntheticSections() {
 
 // The main function of the writer.
 template <class ELFT> void Writer<ELFT>::run() {
-  // Make copies of any input sections that need to be copied into each
-  // partition.
-  copySectionsIntoPartitions();
-
-  // Create linker-synthesized sections such as .got or .plt.
-  // Such sections are of type input section.
-  createSyntheticSections<ELFT>();
-
-  // Some input sections that are used for exception handling need to be moved
-  // into synthetic sections. Do that now so that they aren't assigned to
-  // output sections in the usual way.
-  if (!config->relocatable)
-    combineEhSections<ELFT>();
-
-  // We want to process linker script commands. When SECTIONS command
-  // is given we let it create sections.
-  script->processSectionCommands();
-
   // Linker scripts controls how input sections are assigned to output sections.
   // Input sections that were not handled by scripts are called "orphans", and
   // they are assigned to output sections by the default rule. Process that.
@@ -2733,3 +2715,28 @@ template void elf::writeResult<ELF32LE>();
 template void elf::writeResult<ELF32BE>();
 template void elf::writeResult<ELF64LE>();
 template void elf::writeResult<ELF64BE>();
+
+template <class ELFT> void elf::preWriteResult() {
+  // Make copies of any input sections that need to be copied into each
+  // partition.
+  copySectionsIntoPartitions();
+
+  // Create linker-synthesized sections such as .got or .plt.
+  // Such sections are of type input section.
+  createSyntheticSections<ELFT>();
+
+  // Some input sections that are used for exception handling need to be moved
+  // into synthetic sections. Do that now so that they aren't assigned to
+  // output sections in the usual way.
+  if (!config->relocatable)
+    combineEhSections<ELFT>();
+
+  // We want to process linker script commands. When SECTIONS command
+  // is given we let it create sections.
+  script->processSectionCommands();
+}
+
+template void elf::preWriteResult<ELF32LE>();
+template void elf::preWriteResult<ELF32BE>();
+template void elf::preWriteResult<ELF64LE>();
+template void elf::preWriteResult<ELF64BE>();
