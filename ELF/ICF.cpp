@@ -307,7 +307,8 @@ bool ICF<ELFT>::equalsConstant(const InputSection *a, const InputSection *b) {
   // FIXME: This doesn't do the right thing in the case where there is a linker
   // script. We probably need to move output section assignment before ICF to
   // get the correct behaviour here.
-  if (getOutputSectionName(a) != getOutputSectionName(b))
+  if (getOutputSectionName(a) != getOutputSectionName(b) ||
+      a->getParent() != b->getParent())
     return false;
 
   if (a->areRelocsRela)

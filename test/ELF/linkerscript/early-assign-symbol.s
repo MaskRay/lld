@@ -2,9 +2,11 @@
 # RUN: llvm-mc -filetype=obj -triple=x86_64-unknown-linux %s -o %t.o
 
 # RUN: echo "SECTIONS { aaa = foo | 1; .text  : { *(.text*) } }" > %t3.script
-# RUN: not ld.lld -o %t --script %t3.script %t.o 2>&1 | FileCheck %s
+# RUN: ld.lld -o %t --script %t3.script %t.o
+# RUN: llvm-objdump -t %t | FileCheck --check-prefix=VAL1 %s
 
-# CHECK: error: {{.*}}.script:1: unable to evaluate expression: input section .text has no output section assigned
+# VAL1: 0000000000000000 .text 00000000 foo
+# VAL1: 0000000000000001 .text 00000000 aaa
 
 # Simple cases that we can handle.
 

@@ -152,7 +152,7 @@ static void removeEmptyPTLoad(std::vector<PhdrEntry *> &phdrs) {
   });
 }
 
-static void copySectionsIntoPartitions() {
+void elf::copySectionsIntoPartitions() {
   std::vector<InputSectionBase *> newSections;
   for (unsigned part = 2; part != partitions.size() + 1; ++part) {
     for (InputSectionBase *s : inputSections) {
@@ -183,10 +183,16 @@ template <class ELFT> static void combineEhSections() {
 
     Partition &part = s->getPartition();
     if (auto *es = dyn_cast<EhInputSection>(s)) {
-      part.ehFrame->addSection<ELFT>(es);
+      if (part.ehFrame->isLive())
+        part.ehFrame->addSection<ELFT>(es);
+      else
+        // If part.ehFrame is discarded by /DISCARD/, discard .rela.eh_frame as well.
+        for (InputSection *dep : es->dependentSections)
+          dep->markDead();
+
       s = nullptr;
     } else if (s->kind() == SectionBase::Regular && part.armExidx &&
-               part.armExidx->addSection(cast<InputSection>(s))) {
+        part.armExidx->addSection(cast<InputSection>(s))) {
       s = nullptr;
     }
   }
@@ -309,7 +315,7 @@ static OutputSection *findSection(StringRef name, unsigned partition = 1) {
 }
 
 // Initialize Out members.
-template <class ELFT> static void createSyntheticSections() {
+template <class ELFT> void elf::createSyntheticSections() {
   // Initialize all pointers with NULL. This is needed because
   // you can call lld::elf::main more than once as a library.
   memset(&Out::first, 0, sizeof(Out));
@@ -540,14 +546,6 @@ template <class ELFT> static void createSyntheticSections() {
 
 // The main function of the writer.
 template <class ELFT> void Writer<ELFT>::run() {
-  // Make copies of any input sections that need to be copied into each
-  // partition.
-  copySectionsIntoPartitions();
-
-  // Create linker-synthesized sections such as .got or .plt.
-  // Such sections are of type input section.
-  createSyntheticSections<ELFT>();
-
   // Some input sections that are used for exception handling need to be moved
   // into synthetic sections. Do that now so that they aren't assigned to
   // output sections in the usual way.
@@ -556,7 +554,7 @@ template <class ELFT> void Writer<ELFT>::run() {
 
   // We want to process linker script commands. When SECTIONS command
   // is given we let it create sections.
-  script->processSectionCommands();
+  script->processSymbolAssignments();
 
   // Linker scripts controls how input sections are assigned to output sections.
   // Input sections that were not handled by scripts are called "orphans", and
@@ -2717,6 +2715,10 @@ template <class ELFT> void Writer<ELFT>::writeBuildId() {
     part.buildId->writeBuildId(buildId);
 }
 
+template void elf::createSyntheticSections<ELF32LE>();
+template void elf::createSyntheticSections<ELF32BE>();
+template void elf::createSyntheticSections<ELF64LE>();
+template void elf::createSyntheticSections<ELF64BE>();
 template void elf::writeResult<ELF32LE>();
 template void elf::writeResult<ELF32BE>();
 template void elf::writeResult<ELF64LE>();

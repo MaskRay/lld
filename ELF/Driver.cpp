@@ -1898,9 +1898,25 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
   markLive<ELFT>();
   demoteSharedSymbols();
   mergeSections();
+
+  // Make copies of any input sections that need to be copied into each
+  // partition.
+  copySectionsIntoPartitions();
+
+  // Create linker-synthesized sections such as .got or .plt.
+  // Such sections are of type input section.
+  createSyntheticSections<ELFT>();
+
+  script->processSectionCommands();
   if (config->icf != ICFLevel::None) {
     findKeepUniqueSections<ELFT>(args);
     doIcf<ELFT>();
+
+    // Delete merged-by-ICF sections.
+    for (BaseCommand *base : script->sectionCommands)
+      if (auto *isd = dyn_cast<InputSectionDescription>(base))
+        llvm::remove_if(isd->sections,
+                        [](InputSection *isec) { return !isec->isLive(); });
   }
 
   // Read the callgraph now that we know what was gced or icfed

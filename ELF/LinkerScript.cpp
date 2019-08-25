@@ -381,6 +381,14 @@ LinkerScript::computeInputSections(const InputSectionDescription *cmd) {
       if (!sec->isLive() || sec->assigned)
         continue;
 
+      // .eh_frame and .ARM.exidx* input sections will be combined and removed
+      // from inputSections in Writer. Skip them here. Their synthetic sections
+      // should still be matched.
+      auto *armExidx = sec->getPartition().armExidx;
+      if (isa<EhInputSection>(sec) ||
+          (sec->type == SHT_ARM_EXIDX && armExidx && sec != armExidx))
+        continue;
+
       // For -emit-relocs we have to ignore entries like
       //   .rela.dyn : { *(.rela.data) }
       // which are common because they are in the default bfd script.
@@ -442,35 +450,8 @@ LinkerScript::createInputSectionList(OutputSection &outCmd) {
 }
 
 void LinkerScript::processSectionCommands() {
-  // A symbol can be assigned before any section is mentioned in the linker
-  // script. In an DSO, the symbol values are addresses, so the only important
-  // section values are:
-  // * SHN_UNDEF
-  // * SHN_ABS
-  // * Any value meaning a regular section.
-  // To handle that, create a dummy aether section that fills the void before
-  // the linker scripts switches to another section. It has an index of one
-  // which will map to whatever the first actual section is.
-  aether = make<OutputSection>("", 0, SHF_ALLOC);
-  aether->sectionIndex = 1;
-
-  // Ctx captures the local AddressState and makes it accessible deliberately.
-  // This is needed as there are some cases where we cannot just
-  // thread the current state through to a lambda function created by the
-  // script parser.
-  auto deleter = std::make_unique<AddressState>();
-  ctx = deleter.get();
-  ctx->outSec = aether;
-
   size_t i = 0;
-  // Add input sections to output sections.
   for (BaseCommand *base : sectionCommands) {
-    // Handle symbol assignments outside of any output section.
-    if (auto *cmd = dyn_cast<SymbolAssignment>(base)) {
-      addSymbol(cmd);
-      continue;
-    }
-
     if (auto *sec = dyn_cast<OutputSection>(base)) {
       std::vector<InputSection *> v = createInputSectionList(*sec);
 
@@ -496,12 +477,6 @@ void LinkerScript::processSectionCommands() {
         continue;
       }
 
-      // A directive may contain symbol definitions like this:
-      // ".foo : { ...; bar = .; }". Handle them.
-      for (BaseCommand *base : sec->sectionCommands)
-        if (auto *outCmd = dyn_cast<SymbolAssignment>(base))
-          addSymbol(outCmd);
-
       // Handle subalign (e.g. ".foo : SUBALIGN(32) { ... }"). If subalign
       // is given, input sections are aligned to that value, whether the
       // given value is larger or smaller than the original section alignment.
@@ -520,6 +495,47 @@ void LinkerScript::processSectionCommands() {
         sec->type = SHT_NOBITS;
       if (sec->nonAlloc)
         sec->flags &= ~(uint64_t)SHF_ALLOC;
+    }
+  }
+}
+
+void LinkerScript::processSymbolAssignments() {
+  // A symbol can be assigned before any section is mentioned in the linker
+  // script. In an DSO, the symbol values are addresses, so the only important
+  // section values are:
+  // * SHN_UNDEF
+  // * SHN_ABS
+  // * Any value meaning a regular section.
+  // To handle that, create a dummy aether section that fills the void before
+  // the linker scripts switches to another section. It has an index of one
+  // which will map to whatever the first actual section is.
+  aether = make<OutputSection>("", 0, SHF_ALLOC);
+  aether->sectionIndex = 1;
+
+  // Ctx captures the local AddressState and makes it accessible deliberately.
+  // This is needed as there are some cases where we cannot just
+  // thread the current state through to a lambda function created by the
+  // script parser.
+  auto deleter = std::make_unique<AddressState>();
+  ctx = deleter.get();
+  ctx->outSec = aether;
+
+  for (BaseCommand *base : sectionCommands) {
+    // Handle symbol assignments outside of any output section.
+    if (auto *cmd = dyn_cast<SymbolAssignment>(base)) {
+      addSymbol(cmd);
+      continue;
+    }
+
+    if (auto *sec = dyn_cast<OutputSection>(base)) {
+      if (sec->sectionIndex == UINT32_C(-1))
+        continue;
+
+      // A directive may contain symbol definitions like this:
+      // ".foo : { ...; bar = .; }". Handle them.
+      for (BaseCommand *base : sec->sectionCommands)
+        if (auto *outCmd = dyn_cast<SymbolAssignment>(base))
+          addSymbol(outCmd);
     }
   }
   ctx = nullptr;
