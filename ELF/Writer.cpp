@@ -907,23 +907,23 @@ static unsigned getSectionRank(const OutputSection *sec) {
       rank |= RF_EXEC_WRITE;
     else
       rank |= RF_EXEC;
-  } else if (isWrite) {
-    rank |= RF_WRITE;
-  } else if (sec->type == SHT_PROGBITS) {
+  } else if (!isWrite) {
     // Make non-executable and non-writable PROGBITS sections (e.g .rodata
     // .eh_frame) closer to .text. They likely contain PC or GOT relative
     // relocations and there could be relocation overflow if other huge sections
     // (.dynstr .dynsym) were placed in between.
-    rank |= RF_RODATA;
-  }
-
+    if (sec->type == SHT_PROGBITS)
+      rank |= RF_RODATA;
+  } else if (isRelroSection(sec)) {
   // Place RelRo sections first. After considering SHT_NOBITS below, the
   // ordering is PT_LOAD(PT_GNU_RELRO(.data.rel.ro .bss.rel.ro) | .data .bss),
   // where | marks where page alignment happens. An alternative ordering is
   // PT_LOAD(.data | PT_GNU_RELRO( .data.rel.ro .bss.rel.ro) | .bss), but it may
   // waste more bytes due to 2 alignment places.
-  if (!isRelroSection(sec))
-    rank |= RF_NOT_RELRO;
+      rank |= RF_RODATA | RF_NOT_RELRO;
+  } else {
+    rank |= RF_WRITE;
+  }
 
   // If we got here we know that both A and B are in the same PT_LOAD.
 
@@ -2261,6 +2261,14 @@ template <class ELFT> void Writer<ELFT>::fixSectionAlignments() {
   };
 
   for (Partition &part : partitions) {
+    for (const PhdrEntry *p : part.phdrs)
+      if (p->p_type == PT_GNU_RELRO && p->firstSec) {
+        OutputSection *cmd = p->firstSec;
+        if (!cmd->addrExpr)
+          cmd->addrExpr = [] {
+            return alignTo(script->getDot(), config->maxPageSize);
+          };
+      }
     prev = nullptr;
     for (const PhdrEntry *p : part.phdrs)
       if (p->p_type == PT_LOAD && p->firstSec) {
