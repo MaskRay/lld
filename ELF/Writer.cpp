@@ -2273,39 +2273,34 @@ template <class ELFT> void Writer<ELFT>::fixSectionAlignments() {
 // Compute an in-file position for a given section. The file offset must be the
 // same with its virtual address modulo the page size, so that the loader can
 // load executables without any address adjustment.
-static uint64_t computeFileOffset(OutputSection *os, uint64_t off) {
+static uint64_t setFileOffset(OutputSection *os, uint64_t off) {
   // The first section in a PT_LOAD has to have congruent offset and address
   // module the page size.
+  uint64_t newOff = off;
   if (os->ptLoad && os->ptLoad->firstSec == os) {
     uint64_t alignment = std::max<uint64_t>(os->alignment, config->maxPageSize);
-    return alignTo(off, alignment, os->addr);
+    newOff = alignTo(off, alignment, os->addr);
   }
 
-  // File offsets are not significant for .bss sections other than the first one
-  // in a PT_LOAD. By convention, we keep section offsets monotonically
-  // increasing rather than setting to zero.
-   if (os->type == SHT_NOBITS)
-     return off;
-
-  // If the section is not in a PT_LOAD, we just have to align it.
-  if (!os->ptLoad)
-    return alignTo(off, os->alignment);
-
-  // If two sections share the same PT_LOAD the file offset is calculated
-  // using this formula: Off2 = Off1 + (VA2 - VA1).
-  OutputSection *first = os->ptLoad->firstSec;
-  return first->offset + os->addr - first->addr;
-}
-
-// Set an in-file position to a given section and returns the end position of
-// the section.
-static uint64_t setFileOffset(OutputSection *os, uint64_t off) {
-  off = computeFileOffset(os, off);
-  os->offset = off;
-
-  if (os->type == SHT_NOBITS)
+  // File offsets are not significant for SHT_NOBITS sections, but obey the
+  // congruence rule if it is the first section in a PT_LOAD. Do not advance the
+  // in-file position.
+  if (os->type == SHT_NOBITS) {
+    os->offset = newOff;
     return off;
-  return off + os->size;
+  }
+
+  if (!os->ptLoad) {
+    newOff = alignTo(off, os->alignment);
+  } else if (os->ptLoad->firstSec != os) {
+    // If two sections share the same PT_LOAD, the file offset is calculated
+    // using this formula: Off2 = Off1 + (VA2 - VA1).
+    OutputSection *first = os->ptLoad->firstSec;
+    newOff = first->offset + os->addr - first->addr;
+  }
+
+  os->offset = newOff;
+  return newOff + os->size;
 }
 
 template <class ELFT> void Writer<ELFT>::assignFileOffsetsBinary() {
