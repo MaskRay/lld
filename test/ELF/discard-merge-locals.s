@@ -1,10 +1,13 @@
 # REQUIRES: x86
 
-## Test that the .L symbol in a SHF_MERGE section is omitted.
+## Test that local symbols in a SHF_MERGE section are omitted.
 
 # RUN: llvm-mc -filetype=obj -triple=x86_64 %s -o %t.o
 # RUN: ld.lld %t.o -o %t
-# RUN: llvm-readelf -s %t | FileCheck /dev/null --implicit-check-not=.L.str
+# RUN: llvm-nm %t | count 0
+
+# RUN: ld.lld --discard-locals %t.o -o %t2
+# RUN: llvm-nm %t2 | count 0
 
 lea .L.str(%rip), %rdi
 lea local(%rip), %rdi
