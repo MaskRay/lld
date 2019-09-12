@@ -2114,7 +2114,10 @@ std::vector<PhdrEntry *> Writer<ELFT>::createPhdrs(Partition &part) {
          load->lastSec != Out::programHeaders) ||
         sec->memRegion != load->firstSec->memRegion || flags != newFlags ||
         sec == relroEnd) {
-      load = addHdr(PT_LOAD, newFlags);
+      if (load && load->lastSec == Out::programHeaders && (newFlags & PF_R))
+        load->p_flags = newFlags;
+      else
+        load = addHdr(PT_LOAD, newFlags);
       flags = newFlags;
     }
 
