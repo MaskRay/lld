@@ -443,7 +443,7 @@ template <class ELFT> void elf::createSyntheticSections() {
     // Create the partition end marker. This needs to be in partition number 255
     // so that it is sorted after all other partitions. It also has other
     // special handling (see createPhdrs() and combineEhSections()).
-    in.partEnd = make<BssSection>(".part.end", config->maxPageSize, 1);
+    in.partEnd = make<BssSection>(".part.end", 1, 1);
     in.partEnd->partition = 255;
     add(in.partEnd);
 
@@ -2227,15 +2227,8 @@ template <class ELFT> void Writer<ELFT>::fixSectionAlignments() {
       // between an executable segment and a non-executable segment. We align to
       // the next maximum page size boundary on transitions between executable
       // and non-executable segments.
-      //
-      // SHT_LLVM_PART_EHDR marks the start of a partition. The partition
-      // sections will be extracted to a separate file. Align to the next
-      // maximum page size boundary so that we can find the ELF header at the
-      // start. We cannot benefit from overlapping p_offset ranges with the
-      // previous segment anyway.
-      if ((config->zSeparateCode && prev &&
-           (prev->p_flags & PF_X) != (p->p_flags & PF_X)) ||
-          cmd->type == SHT_LLVM_PART_EHDR)
+      if (config->zSeparateCode && prev &&
+          (prev->p_flags & PF_X) != (p->p_flags & PF_X))
         cmd->addrExpr = [] {
           return alignTo(script->getDot(), config->maxPageSize);
         };

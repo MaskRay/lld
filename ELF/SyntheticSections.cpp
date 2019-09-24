@@ -3576,9 +3576,14 @@ template <typename ELFT> void elf::writePhdrs(uint8_t *buf, Partition &part) {
   }
 }
 
+// SHT_LLVM_PART_EHDR marks the start of a partition. The partition
+// sections will be extracted to a separate file. Align to the next
+// maximum page size boundary so that we can find the ELF header at the
+// start.
 template <typename ELFT>
 PartitionElfHeaderSection<ELFT>::PartitionElfHeaderSection()
-    : SyntheticSection(SHF_ALLOC, SHT_LLVM_PART_EHDR, 1, "") {}
+    : SyntheticSection(SHF_ALLOC, SHT_LLVM_PART_EHDR, config->maxPageSize, "") {
+}
 
 template <typename ELFT>
 size_t PartitionElfHeaderSection<ELFT>::getSize() const {

@@ -16,6 +16,7 @@
 // CHECK: [[P1:[0-9]+]]] .text
 // CHECK: part2 LLVM_PART_EHDR {{[0-9a-f]+}}0000 {{[0-9a-f]+}}0000
 // CHECK: [[P2:[0-9]+]]] .text
+// CHECK: .part.end NOBITS     {{[0-9a-f]+}}     {{[0-9a-f]+}}     000001
 
 // CHECK: Symbol table '.symtab'
 // CHECK: [[MAIN]] f3
